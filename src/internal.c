@@ -11445,7 +11445,7 @@ static void AddSessionCertToChain(WOLFSSL_X509_CHAIN* chain,
 }
 #endif
 
-#if defined(KEEP_PEER_CERT) || defined(SESSION_CERTS) || \
+#if defined(KEEP_PEER_CERT) || defined(SESSION_CERTS)  || defined(BLS_CHECK_CERT_EXPIRY) || \
     defined(OPENSSL_EXTRA) || defined(OPENSSL_EXTRA_X509_SMALL)
 static void CopyDecodedName(WOLFSSL_X509_NAME* name, DecodedCert* dCert, int nameType)
 {
@@ -11519,7 +11519,7 @@ static int CopyAdditionalAltNames(DNS_entry** to, DNS_entry* from, int type,
 }
 #endif /* OPENSSL_EXTRA */
 
-#ifdef WOLFSSL_CERT_REQ
+#if defined( WOLFSSL_CERT_REQ)
 static int CopyREQAttributes(WOLFSSL_X509* x509, DecodedCert* dCert)
 {
     int ret = 0;

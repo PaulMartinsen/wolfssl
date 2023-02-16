@@ -40,7 +40,7 @@
 
 // Enable additional debugging during a TLS connection
 // https://www.wolfssl.com/documentation/manuals/wolfssl/chapter02.html#wolfssl_debug_tls
-#define WOLFSSL_DEBUG_TLS
+//#define WOLFSSL_DEBUG_TLS
 
 // Force callback set in wolfSSL_CTX_set_verify to be called every time (not just on failure)
 // see: https://www.wolfssl.com/forums/post2349.html#p2349
