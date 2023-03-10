@@ -51,6 +51,13 @@
 // see: https://www.wolfssl.com/documentation/manuals/wolfssl/chapter07.html#supported-certificate-extensions
 #define WOLFSSL_CERT_EXT
 
+// To support session resumption for TLSv1.3 
+// https://www.wolfssl.com/documentation/manuals/wolfssl/group__IO.html#function-wolfssl_usesessionticket
+#define HAVE_SESSION_TICKET
+
+// for wolfSSL_get_sessionID (only needed for debugging in Lumos). 
+//#define SESSION_CERTS
+
 /* Configurations */
 #if defined(HAVE_FIPS)
     /* FIPS */
