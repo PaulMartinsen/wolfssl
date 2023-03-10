@@ -9409,6 +9409,10 @@ static int DoTls13NewSessionTicket(WOLFSSL* ssl, const byte* input,
 #endif
     const byte* nonce;
     byte        nonceLength;
+#ifndef NO_SESSION_CACHE
+    const byte * id;
+    byte idSz;
+#endif
 
     WOLFSSL_START(WC_FUNC_NEW_SESSION_TICKET_DO);
     WOLFSSL_ENTER("DoTls13NewSessionTicket");
@@ -9506,6 +9510,14 @@ static int DoTls13NewSessionTicket(WOLFSSL* ssl, const byte* input,
 
     #ifndef NO_SESSION_CACHE
     AddSession(ssl);
+    id = ssl->session->sessionID;
+    idSz = ssl->session->sessionIDSz;
+    if (ssl->session->haveAltSessionID) {
+      id = ssl->session->altSessionID;
+      idSz = ID_LEN;
+    }
+    AddSessionToCache(ssl->ctx, ssl->session, id, idSz, NULL,
+      ssl->session->side, 1, &ssl->clientSession);
     #endif
 
     /* Always encrypted. */
