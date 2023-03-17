@@ -1,6 +1,10 @@
 #ifndef _WIN_USER_SETTINGS_H_
 #define _WIN_USER_SETTINGS_H_
 
+#if 1
+#include "../Wolf_Features.h"
+#else
+
 /* Verify this is Windows */
 #ifndef _WIN32
 #error This user_settings.h header is only designed for Windows
@@ -131,5 +135,7 @@
         #define NO_PSK
     #endif
 #endif /* HAVE_FIPS */
+#endif
+
 
 #endif /* _WIN_USER_SETTINGS_H_ */
