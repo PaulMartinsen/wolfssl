@@ -807,7 +807,7 @@ extern void uITRON4_free(void *p) ;
         #define XFREE(p, h, type)    vPortFree((p))
         /* FreeRTOS pvPortRealloc() implementation can be found here:
          * https://github.com/wolfSSL/wolfssl-freertos/pull/3/files */
-        #if defined(USE_INTEGER_HEAP_MATH) || defined(OPENSSL_EXTRA)
+        #if defined(USE_INTEGER_HEAP_MATH) || defined(OPENSSL_EXTRA) || defined(HAVE_SESSION_TICKET)
             #if defined(WOLFSSL_ESPIDF)
                 /* In IDF, realloc(p, n) is equivalent to
                  * heap_caps_realloc(p, s, MALLOC_CAP_8BIT) */
