@@ -73,6 +73,7 @@
 
 #if (defined(OPENSSL_EXTRA) || defined(HAVE_WEBSERVER)) \
     && !defined(WOLFCRYPT_ONLY)
+#include <wolfssl/wolfcrypt/port/Espressif/esp32-crypt.h>
     #include <wolfssl/openssl/evp.h>
 #endif
 

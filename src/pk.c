@@ -12261,7 +12261,7 @@ int wolfSSL_PEM_write_mem_ECPrivateKey(WOLFSSL_EC_KEY* ec,
 {
 #if defined(WOLFSSL_PEM_TO_DER) || defined(WOLFSSL_DER_TO_PEM)
     int ret = 1;
-    byte* derBuf;
+    byte* derBuf = NULL;
     int der_max_len = 0;
     int derSz = 0;
 
