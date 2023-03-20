@@ -85,12 +85,12 @@ static int esp_aes_hw_InUse()
 
     /* Enable AES hardware */
     periph_module_enable(PERIPH_AES_MODULE);
-
+  
 #if CONFIG_IDF_TARGET_ESP32S3
-    /* Select working mode. Can be typical or DMA.
+    /* Select working mode. Can be typical or DMA. 
      * 0 => typical
      * 1 => DMA */
-    DPORT_REG_WRITE(AES_DMA_ENABLE_REG, 0);
+    DPORT_REG_WRITE(AES_DMA_ENABLE_REG, 0); 
 #endif
 
     ESP_LOGV(TAG, "leave esp_aes_hw_InUse");

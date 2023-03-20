@@ -325,16 +325,16 @@ int esp_mp_mul(fp_int* X, fp_int* Y, fp_int* Z)
 {
     int ret = 0;
     int neg = (X->sign == Y->sign)? MP_ZPOS : MP_NEG;
-
+  
 #if CONFIG_IDF_TARGET_ESP32S3
-
+  
     int nBitsInX = mp_count_bits(X);
     int nBitsInY = mp_count_bits(Y);
-
+  
     /* X & Y must be represented by the same number of bits. Must be
      * enough to represent the larger one. */
     int nMinXYBits = max(nBitsInX, nBitsInY);
-
+  
     /* Figure out how many words we need to represent each operand & the result. */
     int nWordsForOperand = bits2words(nMinXYBits);
     int nWordsForResult = bits2words(nBitsInX + nBitsInY);

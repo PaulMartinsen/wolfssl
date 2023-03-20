@@ -565,13 +565,9 @@ int esp_unroll_sha_module_enable(WC_ESP32SHA* ctx)
     int actual_unroll_count = 0;
     int max_unroll_count = 1000; /* never get stuck in a hardware wait loop */
 
-    this_sha_mask = periph_ll_get_clk_en_mask(PERIPH_SHA_MODULE);
-
     /* unwind prior calls to THIS ctx. decrement ref_counts[periph] */
     /* only when ref_counts[periph] == 0 does something actually happen */
 
-    /* once the value we read is a 0 in the DPORT_PERI_CLK_EN_REG bit
-     * then we have fully unrolled the enables via ref_counts[periph]==0 */
 #if CONFIG_IDF_TARGET_ESP32S3
     /* once the value we read is a 0 in the DPORT_PERI_CLK_EN_REG bit
      * then we have fully unrolled the enables via ref_counts[periph]==0 */

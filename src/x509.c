@@ -1870,7 +1870,7 @@ out:
 
 #endif /* OPENSSL_ALL */
 
-#if defined(OPENSSL_EXTRA) || defined(WOLFSSL_WPAS_SMALL)
+#if defined(OPENSSL_EXTRA) || defined(WOLFSSL_WPAS_SMALL) || defined(BLS_READ_POLICIES)
 /* Looks for the extension matching the passed in nid
  *
  * c   : if not null then is set to status value -2 if multiple occurrences
@@ -2929,7 +2929,7 @@ int wolfSSL_X509_pubkey_digest(const WOLFSSL_X509 *x509,
 #endif /* OPENSSL_EXTRA */
 
 #if defined(KEEP_PEER_CERT) || defined(SESSION_CERTS) || \
-    defined(OPENSSL_EXTRA)  || defined(OPENSSL_EXTRA_X509_SMALL)
+    defined(OPENSSL_EXTRA)  || defined(OPENSSL_EXTRA_X509_SMALL) || defined(BLS_CHECK_CERT_EXPIRY)
 
 /* user externally called free X509, if dynamic go ahead with free, otherwise
  * don't */
@@ -3718,7 +3718,7 @@ byte* wolfSSL_X509_get_hw_serial_number(WOLFSSL_X509* x509,byte* in,
 #endif /* OPENSSL_EXTRA */
 
 /* require OPENSSL_EXTRA since wolfSSL_X509_free is wrapped by OPENSSL_EXTRA */
-#if defined(OPENSSL_EXTRA)
+#if defined(OPENSSL_EXTRA) || defined(BLS_CHECK_CERT_EXPIRY)
 
 WOLFSSL_ASN1_TIME* wolfSSL_X509_get_notBefore(const WOLFSSL_X509* x509)
 {
@@ -3740,8 +3740,10 @@ WOLFSSL_ASN1_TIME* wolfSSL_X509_get_notAfter(const WOLFSSL_X509* x509)
 
     return (WOLFSSL_ASN1_TIME*)&x509->notAfter;
 }
+#endif
 
-
+/* require OPENSSL_EXTRA since wolfSSL_X509_free is wrapped by OPENSSL_EXTRA */
+#if defined(OPENSSL_EXTRA)
 /* return 1 on success 0 on fail */
 int wolfSSL_sk_X509_push(WOLF_STACK_OF(WOLFSSL_X509_NAME)* sk, WOLFSSL_X509* x509)
 {
@@ -4670,7 +4672,7 @@ WOLFSSL_X509* wolfSSL_X509_d2i_fp(WOLFSSL_X509** x509, XFILE file)
 #endif /* OPENSSL_EXTRA && !NO_FILESYSTEM && !NO_STDIO_FILESYSTEM */
 
 #if defined(OPENSSL_EXTRA) || defined(WOLFSSL_WPAS_SMALL) || \
-    defined(KEEP_PEER_CERT) || defined(SESSION_CERTS)
+    defined(KEEP_PEER_CERT) || defined(SESSION_CERTS) || defined(BLS_CHECK_CERT_EXPIRY)
 
 #ifndef NO_FILESYSTEM
 WOLFSSL_ABI

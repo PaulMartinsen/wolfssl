@@ -17,6 +17,48 @@
 #define WOLFSSL_SEND_HRR_COOKIE
 #define WOLFSSL_DTLS_CID
 
+// Enable things needed to decode SSL messages with wireshark. 
+#define HAVE_SECRET_CALLBACK
+
+// Enable support for post-handshake authentication in TLS 1.3
+#define WOLFSSL_POST_HANDSHAKE_AUTH
+
+// Enable key generation:
+// https://www.wolfssl.com/documentation/manuals/wolfssl/chapter07.html#rsa-key-generation
+#define WOLFSSL_KEY_GEN
+
+// Enable certificate generation: 
+// https://www.wolfssl.com/documentation/manuals/wolfssl/chapter07.html#certificate-generation
+#define WOLFSSL_CERT_GEN
+
+// Enable certificate request generation: 
+// https://www.wolfssl.com/documentation/manuals/wolfssl/chapter07.html#certificate-signing-request-csr-generation
+#define WOLFSSL_CERT_REQ
+
+// Enable debugging and logging support
+// https://www.wolfssl.com/documentation/manuals/wolfssl/chapter08.html
+#define DEBUG_WOLFSSL
+
+// Enable additional debugging during a TLS connection
+// https://www.wolfssl.com/documentation/manuals/wolfssl/chapter02.html#wolfssl_debug_tls
+//#define WOLFSSL_DEBUG_TLS
+
+// Force callback set in wolfSSL_CTX_set_verify to be called every time (not just on failure)
+// see: https://www.wolfssl.com/forums/post2349.html#p2349
+#define WOLFSSL_ALWAYS_VERIFY_CB
+
+// Support certificate extensions. If an unsupported or unknown extension that is marked as critical is found, 
+// then an error message is returned, otherwise unsupported or unknown extensions found are ignored.
+// see: https://www.wolfssl.com/documentation/manuals/wolfssl/chapter07.html#supported-certificate-extensions
+#define WOLFSSL_CERT_EXT
+
+// To support session resumption for TLSv1.3 
+// https://www.wolfssl.com/documentation/manuals/wolfssl/group__IO.html#function-wolfssl_usesessionticket
+#define HAVE_SESSION_TICKET
+
+// for wolfSSL_get_sessionID (only needed for debugging in Lumos). 
+//#define SESSION_CERTS
+
 /* Configurations */
 #if defined(HAVE_FIPS)
     /* FIPS */
