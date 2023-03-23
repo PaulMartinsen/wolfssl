@@ -1,6 +1,6 @@
 /* esp32-crypt.h
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -68,6 +68,7 @@
 #endif
 
 
+
 #ifdef __cplusplus
     extern "C" {
 #endif
@@ -80,6 +81,8 @@ int esp_CryptHwMutexUnLock(wolfSSL_Mutex* mutex);
 
     #if ESP_IDF_VERSION_MAJOR >= 4
         #include "esp32/rom/aes.h"
+    #elif defined(CONFIG_IDF_TARGET_ESP32S3)
+        #include "esp32s3/rom/aes.h"
     #else
         #include "rom/aes.h"
     #endif
@@ -116,6 +119,8 @@ int esp_CryptHwMutexUnLock(wolfSSL_Mutex* mutex);
 
     #if ESP_IDF_VERSION_MAJOR >= 4
         #include "esp32/rom/sha.h"
+    #elif defined(CONFIG_IDF_TARGET_ESP32S3)
+         #include "esp32s3/rom/sha.h"
     #else
         #include "rom/sha.h"
     #endif
@@ -145,7 +150,6 @@ int esp_CryptHwMutexUnLock(wolfSSL_Mutex* mutex);
         ESP32_MODE mode; /* an ESP32_MODE value; typically 0 init, 1 HW, 2 SW */
 
         /* see esp_rom/include/esp32/rom/sha.h */
-        enum SHA_TYPE sha_type; /* the Espressif type: SHA1, SHA256, etc.*/
         void* initializer; /* pointer to object the initialized HW; to track copies */
         int lockDepth; /* see ref_counts[periph] in periph_ctrl.c    */
         byte g3;
@@ -155,10 +159,14 @@ int esp_CryptHwMutexUnLock(wolfSSL_Mutex* mutex);
         ** actual enable/disable only occurs for ref_counts[periph] == 0 */
         byte isfirstblock; /* 0 is not first block; 1 = is first block   */
 
+
         byte g5;
         byte g6;
         byte g7;
         byte g8;
+        /* ESP32S3 defines SHA_TYPE to enum, all other ESP32s define it to
+           typedef enum. */
+        enum SHA_TYPE sha_type;
     } WC_ESP32SHA;
 
     int esp_sha_init(WC_ESP32SHA* ctx, enum wc_HashType hash_type);

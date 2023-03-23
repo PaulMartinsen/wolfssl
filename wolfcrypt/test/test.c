@@ -9796,7 +9796,7 @@ static int aesecb_test(void)
 #ifdef WOLFSSL_AES_COUNTER
 static int aesctr_test(Aes* enc, Aes* dec, byte* cipher, byte* plain)
 {
-    int ret;
+    int ret = 0;
 
     /* test vectors from "Recommendation for Block Cipher Modes of
      * Operation" NIST Special Publication 800-38A */
@@ -42944,7 +42944,7 @@ WOLFSSL_TEST_SUBROUTINE int mp_test(void)
 #ifndef WOLFSSL_SP_MATH
     int    k;
 #endif
-    mp_digit d;
+    mp_digit d = 0;
 #endif
 #ifdef WOLFSSL_SMALL_STACK
     mp_int *a = (mp_int *)XMALLOC(sizeof(mp_int), HEAP_HINT,

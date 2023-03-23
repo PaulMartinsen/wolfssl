@@ -1027,27 +1027,25 @@ static int GetASN_Integer(const byte* input, word32 idx, int length,
     (defined(HAVE_FIPS_VERSION) && (HAVE_FIPS_VERSION > 2))
     /* Check contents consist of one or more octets. */
     if (length == 0) {
-    #ifdef WOLFSSL_DEBUG_ASN_TEMPLATE
         WOLFSSL_MSG("Zero length INTEGER not allowed");
-    #endif
         return ASN_PARSE_E;
     }
 #endif
     if (input[idx] == 0) {
         /* Check leading zero byte required. */
         if ((length > 1) && ((input[idx + 1] & 0x80) == 0)) {
-        #ifdef WOLFSSL_DEBUG_ASN_TEMPLATE
             WOLFSSL_MSG("Zero not required on INTEGER");
-        #endif
+        #ifndef WOLFSSL_ASN_INT_LEAD_0_ANY
             return ASN_PARSE_E;
+        #endif
         }
     }
     /* Check whether a leading zero byte was required. */
     else if (positive && (input[idx] & 0x80)) {
-    #ifdef WOLFSSL_DEBUG_ASN_TEMPLATE
         WOLFSSL_MSG("INTEGER is negative");
-    #endif
+    #ifndef WOLFSSL_ASN_INT_LEAD_0_ANY
         return ASN_EXPECT_0_E;
+    #endif /* WOLFSSL_ASN_INT_LEAD_0_ANY */
     }
 
     return 0;
@@ -13637,6 +13635,7 @@ int GetFormattedTime(void* currTime, byte* buf, word32 len)
     struct tm tmpTimeStorage;
     tmpTime = &tmpTimeStorage;
 #else
+    /* Needed in case XGMTIME does not use the tmpTime argument. */
     (void)tmpTime;
 #endif
 
@@ -16668,7 +16667,11 @@ static int DecodeGeneralName(const byte* input, word32* inOutIdx, byte tag,
 
     #if !defined(WOLFSSL_NO_ASN_STRICT) && !defined(WOLFSSL_FPKI)
         /* Verify RFC 5280 Sec 4.2.1.6 rule:
-            "The name MUST NOT be a relative URI" */
+            "The name MUST NOT be a relative URI"
+            As per RFC 3986 Sec 4.3, an absolute URI is only required to contain
+            a scheme and hier-part.  So the only strict requirement is a ':'
+            being present after the scheme.  If a '/' is present as part of the
+            hier-part, it must come after the ':' (see RFC 3986 Sec 3). */
         {
             int i;
 
@@ -16684,10 +16687,15 @@ static int DecodeGeneralName(const byte* input, word32* inOutIdx, byte tag,
                 }
             }
 
-            /* test if no ':' char was found and test that the next two
-             * chars are "//" to match the pattern "://" */
-            if (i >= len - 2 || (input[idx + i + 1] != '/' ||
-                                 input[idx + i + 2] != '/')) {
+            /* test hier-part is empty */
+            if (i == 0 || i == len) {
+                WOLFSSL_MSG("\tEmpty or malformed URI");
+                WOLFSSL_ERROR_VERBOSE(ASN_ALT_NAME_E);
+                return ASN_ALT_NAME_E;
+            }
+
+            /* test if scheme is missing  */
+            if (input[idx + i] != ':') {
                 WOLFSSL_MSG("\tAlt Name must be absolute URI");
                 WOLFSSL_ERROR_VERBOSE(ASN_ALT_NAME_E);
                 return ASN_ALT_NAME_E;
@@ -17125,35 +17133,10 @@ static int DecodeAltNames(const byte* input, int sz, DecodedCert* cert)
         #if !defined(WOLFSSL_NO_ASN_STRICT) && !defined(WOLFSSL_FPKI)
             /* Verify RFC 5280 Sec 4.2.1.6 rule:
                 "The name MUST NOT be a relative URI"
-
-               RFC 3986
-                 * section 4.3. absolute-URI = scheme ":" heir-part ["?"query]
-                 * section 3:
-                    hier-part     = "//" authority path-abempty
-                                 / path-absolute
-                                 / path-rootless
-                                 / path-empty
-                 * section 3.3 --- Path:
-                    path-abempty  = *( "/" segment )
-                    path-absolute = "/" [ segment-nz *( "/" segment ) ]
-                    path-rootless = segment-nz *( "/" segment )
-                    path-empty    = 0<pchar>
-                    segment       = *pchar
-                    segment-nz    = 1*pchar
-                    segment-nz-nc = 1*( unreserved / pct-encoded / sub-delims / "@" )
-                                  ; non-zero-length segment without any colon ":"
-                    pchar         = unreserved / pct-encoded / sub-delims / ":" / "@"
-
-                Because an empty-path is a valid 'heir-part' a URI that contains a scheme
-                must be an absolute path. 
-                
-                However, RFC 5280 §4.2.16:
-                  When the subjectAltName extension contains a URI the name:
-                    * MUST NOT be a relative URI
-                    * MUST follow the URI syntax in RFC 3986
-                    * MUST include both a scheme and a scheme-specific-part (this _might_ mean
-                      that path-empty is not valid). 
-             */
+                As per RFC 3986 Sec 4.3, an absolute URI is only required to contain
+                a scheme and hier-part.  So the only strict requirement is a ':'
+                being present after the scheme.  If a '/' is present as part of the
+                hier-part, it must come after the ':' (see RFC 3986 Sec 3). */
 
             {
                 int i;
@@ -17170,8 +17153,15 @@ static int DecodeAltNames(const byte* input, int sz, DecodedCert* cert)
                     }
                 }
 
-                /* test if scheme is missing or heir-part is empty */
-                if (input[idx + i] != ':' || i == 0 || i == strLen) {
+                /* test hier-part is empty */
+                if (i == 0 || i == strLen) {
+                    WOLFSSL_MSG("\tEmpty or malformed URI");
+                    WOLFSSL_ERROR_VERBOSE(ASN_ALT_NAME_E);
+                    return ASN_ALT_NAME_E;
+                }
+
+                /* test if scheme is missing */
+                if (input[idx + i] != ':') {
                     WOLFSSL_MSG("\tAlt Name must be absolute URI");
                     WOLFSSL_ERROR_VERBOSE(ASN_ALT_NAME_E);
                     return ASN_ALT_NAME_E;
@@ -21295,8 +21285,11 @@ int ParseCertRelative(DecodedCert* cert, int type, int verify, void* cm)
         cert->badDate = 0;
         cert->criticalExt = 0;
         if ((ret = DecodeToKey(cert, verify)) < 0) {
-            if (ret == ASN_BEFORE_DATE_E || ret == ASN_AFTER_DATE_E)
+            if (ret == ASN_BEFORE_DATE_E || ret == ASN_AFTER_DATE_E) {
                 cert->badDate = ret;
+                if (verify == VERIFY_SKIP_DATE)
+                    ret = 0;
+            }
             else
                 return ret;
         }
@@ -21539,6 +21532,8 @@ int ParseCertRelative(DecodedCert* cert, int type, int verify, void* cm)
             ret = DecodeCert(cert, verify, &cert->criticalExt);
             if (ret == ASN_BEFORE_DATE_E || ret == ASN_AFTER_DATE_E) {
                 cert->badDate = ret;
+                if (verify == VERIFY_SKIP_DATE)
+                    ret = 0;
             }
             else if (ret < 0) {
                 WOLFSSL_ERROR_VERBOSE(ret);
@@ -23249,7 +23244,7 @@ int wc_KeyPemToDer(const unsigned char* pem, int pemSz,
 
     WOLFSSL_ENTER("wc_KeyPemToDer");
 
-    if (pem == NULL || buff == NULL || buffSz <= 0) {
+    if (pem == NULL || (buff != NULL && buffSz <= 0)) {
         WOLFSSL_MSG("Bad pem der args");
         return BAD_FUNC_ARG;
     }
@@ -23278,15 +23273,17 @@ int wc_KeyPemToDer(const unsigned char* pem, int pemSz,
     if (ret < 0 || der == NULL) {
         WOLFSSL_MSG("Bad Pem To Der");
     }
+    else if (buff == NULL) {
+        WOLFSSL_MSG("Return needed der buff length");
+        ret = der->length;
+    }
+    else if (der->length <= (word32)buffSz) {
+        XMEMCPY(buff, der->buffer, der->length);
+        ret = der->length;
+    }
     else {
-        if (der->length <= (word32)buffSz) {
-            XMEMCPY(buff, der->buffer, der->length);
-            ret = der->length;
-        }
-        else {
-            WOLFSSL_MSG("Bad der length");
-            ret = BAD_FUNC_ARG;
-        }
+        WOLFSSL_MSG("Bad der length");
+        ret = BAD_FUNC_ARG;
     }
 
     FreeDer(&der);
@@ -23339,7 +23336,8 @@ int wc_CertPemToDer(const unsigned char* pem, int pemSz,
 
 #ifdef WOLFSSL_PEM_TO_DER
 #if defined(WOLFSSL_CERT_EXT) || defined(WOLFSSL_PUB_PEM_TO_DER)
-/* Return bytes written to buff or < 0 for error */
+/* Return bytes written to buff, needed buff size if buff is NULL, or less than
+   zero for error */
 int wc_PubKeyPemToDer(const unsigned char* pem, int pemSz,
                            unsigned char* buff, int buffSz)
 {
@@ -23348,7 +23346,7 @@ int wc_PubKeyPemToDer(const unsigned char* pem, int pemSz,
 
     WOLFSSL_ENTER("wc_PubKeyPemToDer");
 
-    if (pem == NULL || buff == NULL || buffSz <= 0) {
+    if (pem == NULL || (buff != NULL && buffSz <= 0)) {
         WOLFSSL_MSG("Bad pem der args");
         return BAD_FUNC_ARG;
     }
@@ -23357,15 +23355,17 @@ int wc_PubKeyPemToDer(const unsigned char* pem, int pemSz,
     if (ret < 0 || der == NULL) {
         WOLFSSL_MSG("Bad Pem To Der");
     }
+    else if (buff == NULL) {
+        WOLFSSL_MSG("Return needed der buff length");
+        ret = der->length;
+    }
+    else if (der->length <= (word32)buffSz) {
+        XMEMCPY(buff, der->buffer, der->length);
+        ret = der->length;
+    }
     else {
-        if (der->length <= (word32)buffSz) {
-            XMEMCPY(buff, der->buffer, der->length);
-            ret = der->length;
-        }
-        else {
-            WOLFSSL_MSG("Bad der length");
-            ret = BAD_FUNC_ARG;
-        }
+        WOLFSSL_MSG("Bad der length");
+        ret = BAD_FUNC_ARG;
     }
 
     FreeDer(&der);
@@ -33303,6 +33303,9 @@ static int DecodeSingleResponse(byte* source, word32* ioIndex, word32 size,
             return ASN_PARSE_E;
     }
 
+    if (idx >= size)
+        return BUFFER_E;
+
 #if defined(OPENSSL_ALL) || defined(WOLFSSL_NGINX) || defined(WOLFSSL_HAPROXY)
     single->status->thisDateAsn = source + idx;
     localIdx = 0;
@@ -33310,6 +33313,10 @@ static int DecodeSingleResponse(byte* source, word32* ioIndex, word32 size,
                     (byte*)&single->status->thisDateParsed.type,
                     &single->status->thisDateParsed.length, size) < 0)
         return ASN_PARSE_E;
+
+    if (idx + localIdx >= size)
+        return BUFFER_E;
+
     XMEMCPY(single->status->thisDateParsed.data,
             single->status->thisDateAsn + localIdx - single->status->thisDateParsed.length,
             single->status->thisDateParsed.length);
@@ -33342,6 +33349,10 @@ static int DecodeSingleResponse(byte* source, word32* ioIndex, word32 size,
                         (byte*)&single->status->nextDateParsed.type,
                         &single->status->nextDateParsed.length, size) < 0)
             return ASN_PARSE_E;
+
+        if (idx + localIdx >= size)
+            return BUFFER_E;
+
         XMEMCPY(single->status->nextDateParsed.data,
                 single->status->nextDateAsn + localIdx - single->status->nextDateParsed.length,
                 single->status->nextDateParsed.length);
@@ -33790,7 +33801,7 @@ static int DecodeResponseData(byte* source, word32* ioIndex,
     int ret = 0;
     byte version;
     word32 dateSz, idx = *ioIndex;
-    OcspEntry* single;
+    OcspEntry* single = NULL;
 
     WOLFSSL_ENTER("DecodeResponseData");
 
@@ -35659,7 +35670,7 @@ static int ParseCRL_Extensions(DecodedCRL* dcrl, const byte* buf,
                         if (ret != 0)
                             return ret;
                     }
-                    else {
+                    else if (length == 1) {
                         dcrl->crlNumber = buf[idx];
                     }
                 }

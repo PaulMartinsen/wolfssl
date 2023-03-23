@@ -3349,6 +3349,10 @@ int CreateCookieExt(const WOLFSSL* ssl, byte* hash, word16 hashSz,
     TLSX* ext;
     word16 cookieSz = 0;
 
+    if (hash == NULL || hashSz == 0) {
+        return BAD_FUNC_ARG;
+    }
+
     /* Cookie Data = Hash Len | Hash | CS | KeyShare Group */
     cookie[cookieSz++] = (byte)hashSz;
     XMEMCPY(cookie + cookieSz, hash, hashSz);
@@ -5869,7 +5873,6 @@ static int CheckPreSharedKeys(WOLFSSL* ssl, const byte* input, word32 helloSz,
 #else
     ret = DoPreSharedKeys(ssl, input, helloSz - bindersLen, suite, usingPSK,
         &first);
-    CleanupClientTickets((PreSharedKey*)ext->data);
     if (ret != 0) {
         WOLFSSL_MSG_EX("DoPreSharedKeys: %d", ret);
         return ret;
@@ -10017,7 +10020,7 @@ static int DoTls13NewSessionTicket(WOLFSSL* ssl, const byte* input,
     const byte* nonce;
     byte        nonceLength;
 #ifndef NO_SESSION_CACHE
-    const byte * id;
+    const byte* id;
     byte idSz;
 #endif
 
@@ -10120,11 +10123,11 @@ static int DoTls13NewSessionTicket(WOLFSSL* ssl, const byte* input,
     id = ssl->session->sessionID;
     idSz = ssl->session->sessionIDSz;
     if (ssl->session->haveAltSessionID) {
-      id = ssl->session->altSessionID;
-      idSz = ID_LEN;
+        id = ssl->session->altSessionID;
+        idSz = ID_LEN;
     }
     AddSessionToCache(ssl->ctx, ssl->session, id, idSz, NULL,
-      ssl->session->side, 1, &ssl->clientSession);
+        ssl->session->side, 1, &ssl->clientSession);
     #endif
 
     /* Always encrypted. */
@@ -12837,15 +12840,16 @@ int wolfSSL_accept_TLSv13(WOLFSSL* ssl)
             FALL_THROUGH;
 
         case TLS13_ACCEPT_THIRD_REPLY_DONE :
-#if defined(HAVE_SUPPORTED_CURVES) && (defined(HAVE_SESSION_TICKET) || \
-    !defined(NO_PSK))
+    #ifdef HAVE_SUPPORTED_CURVES
+        #if defined(HAVE_SESSION_TICKET) || !defined(NO_PSK)
             if (!ssl->options.noPskDheKe)
-#endif
+        #endif
             {
                 ssl->error = TLSX_KeyShare_DeriveSecret(ssl);
                 if (ssl->error != 0)
                     return WOLFSSL_FATAL_ERROR;
             }
+    #endif
 
             if ((ssl->error = SendTls13EncryptedExtensions(ssl)) != 0) {
                 WOLFSSL_ERROR(ssl->error);
