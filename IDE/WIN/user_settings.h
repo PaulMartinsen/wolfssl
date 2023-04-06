@@ -6,6 +6,9 @@
 #error This user_settings.h header is only designed for Windows
 #endif
 
+// Currently creates link errors.
+#include "../Wolf_Features.h"
+
 #define USE_WOLFSSL_IO
 #define HAVE_AESGCM
 #define WOLFSSL_TLS13
