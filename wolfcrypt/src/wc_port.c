@@ -84,9 +84,7 @@
     #include <wolfssl/wolfcrypt/mem_track.h>
 #endif
 
-#if defined(WOLFSSL_IMX6_CAAM) || defined(WOLFSSL_IMX6_CAAM_RNG) || \
-    defined(WOLFSSL_IMX6UL_CAAM) || defined(WOLFSSL_IMX6_CAAM_BLOB) || \
-    defined(WOLFSSL_SECO_CAAM) || defined(WOLFSSL_IMXRT1170_CAAM)
+#if defined(WOLFSSL_CAAM)
     #include <wolfssl/wolfcrypt/port/caam/wolfcaam.h>
 #endif
 #if defined(WOLFSSL_DEVCRYPTO)
@@ -361,9 +359,7 @@ int wolfCrypt_Init(void)
         }
 #endif
 
-#if defined(WOLFSSL_IMX6_CAAM) || defined(WOLFSSL_IMX6_CAAM_RNG) || \
-    defined(WOLFSSL_IMX6UL_CAAM) || defined(WOLFSSL_IMX6_CAAM_BLOB) || \
-    defined(WOLFSSL_SECO_CAAM) || defined(WOLFSSL_IMXRT1170_CAAM)
+#if defined(WOLFSSL_CAAM)
         if ((ret = wc_caamInit()) != 0) {
             return ret;
         }
@@ -451,9 +447,7 @@ int wolfCrypt_Cleanup(void)
         WOLFSSL_SCE_GSCE_HANDLE.p_api->close(WOLFSSL_SCE_GSCE_HANDLE.p_ctrl);
     #endif
 
-    #if defined(WOLFSSL_IMX6_CAAM) || defined(WOLFSSL_IMX6_CAAM_RNG) || \
-        defined(WOLFSSL_IMX6_CAAM_BLOB)  || \
-        defined(WOLFSSL_SECO_CAAM) || defined(WOLFSSL_IMXRT1170_CAAM)
+    #if defined(WOLFSSL_CAAM)
         wc_caamFree();
     #endif
     #if defined(WOLFSSL_CRYPTOCELL)
@@ -497,7 +491,7 @@ int wc_FileLoad(const char* fname, unsigned char** buf, size_t* bufLen,
     void* heap)
 {
     int ret;
-    size_t fileSz;
+    ssize_t fileSz;
     XFILE f;
 
     if (fname == NULL || buf == NULL || bufLen == NULL) {
@@ -521,9 +515,18 @@ int wc_FileLoad(const char* fname, unsigned char** buf, size_t* bufLen,
         return BAD_PATH_ERROR;
     }
     fileSz = XFTELL(f);
-    XREWIND(f);
+    if (fileSz < 0) {
+        WOLFSSL_MSG("wc_LoadFile ftell error");
+        XFCLOSE(f);
+        return BAD_PATH_ERROR;
+    }
+    if (XFSEEK(f, 0, XSEEK_SET) != 0) {
+        WOLFSSL_MSG("wc_LoadFile file seek error");
+        XFCLOSE(f);
+        return BAD_PATH_ERROR;
+    }
     if (fileSz > 0) {
-        *bufLen = fileSz;
+        *bufLen = (size_t)fileSz;
         *buf = (byte*)XMALLOC(*bufLen, heap, DYNAMIC_TYPE_TMP_BUFFER);
         if (*buf == NULL) {
             WOLFSSL_MSG("wc_LoadFile memory error");
@@ -732,13 +735,13 @@ int wc_ReadDirFirst(ReadDirCtx* ctx, const char* path, char** name)
             ret = BAD_PATH_ERROR;
             break;
         }
-        XSTRNCPY(ctx->name, path, pathLen + 1);
+        XSTRNCPY(ctx->name, path, (size_t)pathLen + 1);
         ctx->name[pathLen] = '/';
 
         /* Use dnameLen + 1 for GCC 8 warnings of truncating d_name. Because
          * of earlier check it is known that dnameLen is less than
          * MAX_FILENAME_SZ - (pathLen + 2)  so dnameLen +1 will fit */
-        XSTRNCPY(ctx->name + pathLen + 1, ctx->entry->d_name, dnameLen + 1);
+        XSTRNCPY(ctx->name + pathLen + 1, ctx->entry->d_name, (size_t)dnameLen + 1);
         if ((ret = wc_FileExists(ctx->name)) == 0) {
             if (name)
                 *name = ctx->name;
@@ -857,12 +860,12 @@ int wc_ReadDirNext(ReadDirCtx* ctx, const char* path, char** name)
             ret = BAD_PATH_ERROR;
             break;
         }
-        XSTRNCPY(ctx->name, path, pathLen + 1);
+        XSTRNCPY(ctx->name, path, (size_t)pathLen + 1);
         ctx->name[pathLen] = '/';
         /* Use dnameLen + 1 for GCC 8 warnings of truncating d_name. Because
          * of earlier check it is known that dnameLen is less than
          * MAX_FILENAME_SZ - (pathLen + 2) so that dnameLen +1 will fit */
-        XSTRNCPY(ctx->name + pathLen + 1, ctx->entry->d_name, dnameLen + 1);
+        XSTRNCPY(ctx->name + pathLen + 1, ctx->entry->d_name, (size_t)dnameLen + 1);
 
         if ((ret = wc_FileExists(ctx->name)) == 0) {
             if (name)
@@ -915,13 +918,48 @@ void wc_ReadDirClose(ReadDirCtx* ctx)
 #endif /* !NO_FILESYSTEM */
 
 #if !defined(NO_FILESYSTEM) && defined(WOLFSSL_ZEPHYR)
-XFILE z_fs_open(const char* filename, const char* perm)
+XFILE z_fs_open(const char* filename, const char* mode)
 {
     XFILE file;
+    fs_mode_t flags = 0;
+
+    if (mode == NULL)
+        return NULL;
+
+    /* Parse mode */
+    switch (*mode++) {
+        case 'r':
+            flags |= FS_O_READ;
+            break;
+        case 'w':
+            flags |= FS_O_WRITE|FS_O_CREATE;
+            break;
+        case 'a':
+            flags |= FS_O_APPEND|FS_O_CREATE;
+            break;
+        default:
+            return NULL;
+    }
+
+    /* Ignore binary flag */
+    if (*mode == 'b')
+        mode++;
+    if (*mode == '+') {
+        flags |= FS_O_READ;
+        /* Don't add write flag if already appending */
+        if (!(flags & FS_O_APPEND))
+            flags |= FS_O_RDWR;
+    }
+    /* Ignore binary flag */
+    if (*mode == 'b')
+        mode++;
+    /* Incorrect mode string */
+    if (*mode != '\0')
+        return NULL;
 
     file = (XFILE)XMALLOC(sizeof(*file), NULL, DYNAMIC_TYPE_FILE);
     if (file != NULL) {
-        if (fs_open(file, filename) != 0) {
+        if (fs_open(file, filename, flags) != 0) {
             XFREE(file, NULL, DYNAMIC_TYPE_FILE);
             file = NULL;
         }
@@ -1080,6 +1118,42 @@ size_t wc_strlcat(char *dst, const char *src, size_t dstSize)
     return dstLen + wc_strlcpy(dst + dstLen, src, dstSize - dstLen);
 }
 #endif /* USE_WOLF_STRLCAT */
+
+#ifdef USE_WOLF_STRCASECMP
+int wc_strcasecmp(const char *s1, const char *s2)
+{
+    char c1, c2;
+    for (;;++s1, ++s2) {
+        c1 = *s1;
+        if ((c1 >= 'a') && (c1 <= 'z'))
+            c1 -= ('a' - 'A');
+        c2 = *s2;
+        if ((c2 >= 'a') && (c2 <= 'z'))
+            c2 -= ('a' - 'A');
+        if ((c1 != c2) || (c1 == 0))
+            break;
+    }
+    return (c1 - c2);
+}
+#endif /* USE_WOLF_STRCASECMP */
+
+#ifdef USE_WOLF_STRNCASECMP
+int wc_strncasecmp(const char *s1, const char *s2, size_t n)
+{
+    char c1, c2;
+    for (c1 = 0, c2 = 0; n > 0; --n, ++s1, ++s2) {
+        c1 = *s1;
+        if ((c1 >= 'a') && (c1 <= 'z'))
+            c1 -= ('a' - 'A');
+        c2 = *s2;
+        if ((c2 >= 'a') && (c2 <= 'z'))
+            c2 -= ('a' - 'A');
+        if ((c1 != c2) || (c1 == 0))
+            break;
+    }
+    return (c1 - c2);
+}
+#endif /* USE_WOLF_STRNCASECMP */
 
 #if !defined(SINGLE_THREADED) && !defined(HAVE_C___ATOMIC)
 void wolfSSL_RefInit(wolfSSL_Ref* ref, int* err)

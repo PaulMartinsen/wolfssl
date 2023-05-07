@@ -23,6 +23,8 @@
 #define __ESP32_CRYPT_H__
 
 #include "wolfssl/wolfcrypt/settings.h"
+#include <wolfssl/wolfcrypt/types.h> /* for MATH_INT_T */
+
 #include "esp_idf_version.h"
 #include "esp_types.h"
 #include "esp_log.h"
@@ -37,6 +39,7 @@
 
 #include <freertos/FreeRTOS.h>
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
+    /* no includes for ESP32C3 at this time (no HW implemented yet) */
 #elif defined(CONFIG_IDF_TARGET_ESP32S3)
     #include "soc/dport_reg.h"
     #include "soc/hwcrypto_reg.h"
@@ -68,10 +71,11 @@
 #endif
 
 
-
 #ifdef __cplusplus
     extern "C" {
 #endif
+
+int esp_ShowExtendedSystemInfo(void);
 
 int esp_CryptHwMutexInit(wolfSSL_Mutex* mutex);
 int esp_CryptHwMutexLock(wolfSSL_Mutex* mutex, TickType_t xBloxkTime);
@@ -81,8 +85,6 @@ int esp_CryptHwMutexUnLock(wolfSSL_Mutex* mutex);
 
     #if ESP_IDF_VERSION_MAJOR >= 4
         #include "esp32/rom/aes.h"
-    #elif defined(CONFIG_IDF_TARGET_ESP32S3)
-        #include "esp32s3/rom/aes.h"
     #else
         #include "rom/aes.h"
     #endif
@@ -104,14 +106,15 @@ int esp_CryptHwMutexUnLock(wolfSSL_Mutex* mutex);
 
 #ifdef WOLFSSL_ESP32WROOM32_CRYPT_DEBUG
 
-    void wc_esp32TimerStart();
-    uint64_t  wc_esp32elapsedTime();
+    void wc_esp32TimerStart(void);
+    uint64_t  wc_esp32elapsedTime(void);
 
 #endif /* WOLFSSL_ESP32WROOM32_CRYPT_DEBUG */
 
-#if (!defined(NO_SHA) || !defined(NO_SHA256) || defined(WOLFSSL_SHA384) || \
-      defined(WOLFSSL_SHA512)) && \
-    !defined(NO_WOLFSSL_ESP32WROOM32_CRYPT_HASH)
+#if !defined(NO_WOLFSSL_ESP32WROOM32_CRYPT_HASH) &&     \
+   (!defined(NO_SHA) || !defined(NO_SHA256) ||          \
+     defined(WOLFSSL_SHA384) || defined(WOLFSSL_SHA512) \
+   )
 
     /* RAW hash function APIs are not implemented with esp32 hardware acceleration*/
     #define WOLFSSL_NO_HASH_RAW
@@ -138,35 +141,30 @@ int esp_CryptHwMutexUnLock(wolfSSL_Mutex* mutex);
 
     typedef struct
     {
-        byte g1;
-        byte g2;
-        /* NOTE:
-        **
-        ** There's a known Espressif byte alignment issue. See:
-        ** https://github.com/wolfSSL/wolfssl/issues/5948
-        **
-        ** To avoid problems, list the largest types first.
-        */
-        ESP32_MODE mode; /* an ESP32_MODE value; typically 0 init, 1 HW, 2 SW */
+        /* pointer to object the initialized HW; to track copies */
+        void* initializer;
 
-        /* see esp_rom/include/esp32/rom/sha.h */
-        void* initializer; /* pointer to object the initialized HW; to track copies */
-        int lockDepth; /* see ref_counts[periph] in periph_ctrl.c    */
-        byte g3;
-        byte g4;
+        /* an ESP32_MODE value; typically:
+        **   0 init,
+        **   1 HW,
+        **   2 SW     */
+        ESP32_MODE mode;
+
+        /* see esp_rom/include/esp32/rom/sha.h
+        **
+        **  the Espressif type: SHA1, SHA256, etc.
+        */
+        enum SHA_TYPE sha_type;
 
         /* we'll keep track of our own locks.
-        ** actual enable/disable only occurs for ref_counts[periph] == 0 */
-        byte isfirstblock; /* 0 is not first block; 1 = is first block   */
+        ** actual enable/disable only occurs for ref_counts[periph] == 0
+        **
+        **  see ref_counts[periph] in periph_ctrl.c */
+        byte lockDepth:7;   /* 7 bits for a small number, pack with below. */
 
-
-        byte g5;
-        byte g6;
-        byte g7;
-        byte g8;
-        /* ESP32S3 defines SHA_TYPE to enum, all other ESP32s define it to
-           typedef enum. */
-        enum SHA_TYPE sha_type;
+        /* 0 (false) this is NOT first block.
+        ** 1 (true ) this is first block.  */
+        byte isfirstblock:1; /* 1 bit only for true / false */
     } WC_ESP32SHA;
 
     int esp_sha_init(WC_ESP32SHA* ctx, enum wc_HashType hash_type);
@@ -206,13 +204,6 @@ int esp_CryptHwMutexUnLock(wolfSSL_Mutex* mutex);
         #define ESP_RSA_TIMEOUT_CNT     0x249F00
     #endif
 
-    /* operands can be up to 4096 bits long.
-     * here we store the bits in wolfSSL fp_int struct.
-     * see wolfCrypt tfm.h
-     */
-    struct fp_int;
-
-
     /*
      * The parameter names in the Espressif implementation are arbitrary.
      *
@@ -223,25 +214,25 @@ int esp_CryptHwMutexUnLock(wolfSSL_Mutex* mutex);
 
     /* Z = (X ^ Y) mod M   : Espressif generic notation    */
     /* Y = (G ^ X) mod P   : wolfSSL DH reference notation */
-    int esp_mp_exptmod(struct fp_int* X,    /* G  */
-                       struct fp_int* Y,    /* X  */
-                              word32 Xbits, /* Ys   typically = fp_count_bits (X) */
-                       struct fp_int* M,    /* P  */
-                       struct fp_int* Z);   /* Y  */
+    int esp_mp_exptmod(MATH_INT_T* X,    /* G  */
+                       MATH_INT_T* Y,    /* X  */
+                       word32 Xbits, /* Ys   typically = mp_count_bits (X) */
+                       MATH_INT_T* M,    /* P  */
+                       MATH_INT_T* Z);   /* Y  */
 
     /* Z = X * Y */
-    int esp_mp_mul(struct fp_int* X,
-                   struct fp_int* Y,
-                   struct fp_int* Z);
+    int esp_mp_mul(MATH_INT_T* X,
+                   MATH_INT_T* Y,
+                   MATH_INT_T* Z);
 
 
     /* Z = X * Y (mod M) */
-    int esp_mp_mulmod(struct fp_int* X,
-                      struct fp_int* Y,
-                      struct fp_int* M,
-                      struct fp_int* Z);
+    int esp_mp_mulmod(MATH_INT_T* X,
+                      MATH_INT_T* Y,
+                      MATH_INT_T* M,
+                      MATH_INT_T* Z);
 
-#endif /* NO_RSA || HAVE_ECC*/
+#endif /* !NO_RSA || HAVE_ECC*/
 
 /* end c++ wrapper */
 #ifdef __cplusplus

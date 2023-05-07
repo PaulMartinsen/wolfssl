@@ -54,6 +54,10 @@
     #include <wolfssl/wolfcrypt/cryptocb.h>
 #endif
 
+#ifdef WOLFSSL_IMXRT1170_CAAM
+#include <wolfssl/wolfcrypt/port/caam/wolfcaam_fsl_nxp.h>
+#endif
+
 #undef WOLFSSL_USE_ESP32WROOM32_CRYPT_HASH_HW
 #if defined(WOLFSSL_ESP32WROOM32_CRYPT) && \
     !defined(NO_WOLFSSL_ESP32WROOM32_CRYPT_HASH)
@@ -68,10 +72,11 @@
     /* Although we have hardware acceleration,
     ** we may need to fall back to software */
     #define USE_SHA_SOFTWARE_IMPL
-
+    static const char* TAG = "wc_sha";
 #elif defined(WOLFSSL_USE_ESP32C3_CRYPT_HASH_HW)
     /* The ESP32C3 is different; HW crypto here. Not yet implemented.
     ** We'll be using software for RISC-V at this time */
+    static const char* TAG = "wc_sha-c3";
 #else
     #undef WOLFSSL_USE_ESP32WROOM32_CRYPT_HASH_HW
 #endif
@@ -552,7 +557,6 @@ static WC_INLINE void AddLength(wc_Sha* sha, word32 len)
 int wc_InitSha_ex(wc_Sha* sha, void* heap, int devId)
 {
     int ret = 0;
-    (void)devId;
     if (sha == NULL) {
         return BAD_FUNC_ARG;
     }
@@ -566,7 +570,7 @@ int wc_InitSha_ex(wc_Sha* sha, void* heap, int devId)
 #ifdef WOLFSSL_USE_ESP32WROOM32_CRYPT_HASH_HW
     if (sha->ctx.mode != ESP32_SHA_INIT) {
         /* it may be interesting to see old values during debugging */
-        ESP_LOGV("SHA", "Set ctx mode from prior value: %d", sha->ctx.mode);
+        ESP_LOGV(TAG, "Set ctx mode from prior value: %d", sha->ctx.mode);
     }
     /* We know this is a fresh, uninitialized item, so set to INIT */
     sha->ctx.mode = ESP32_SHA_INIT;
@@ -582,7 +586,7 @@ int wc_InitSha_ex(wc_Sha* sha, void* heap, int devId)
                                                             sha->heap, devId);
 #else
     (void)devId;
-#endif /* WOLFSSL_ASYNC_CRYPT */
+# endif /* WOLFSSL_ASYNC_CRYPT */
 #ifdef WOLFSSL_IMXRT1170_CAAM
    ret = wc_CAAM_HashInit(&sha->hndl, &sha->ctx, WC_HASH_TYPE_SHA);
 #endif
@@ -649,20 +653,20 @@ int wc_ShaUpdate(wc_Sha* sha, const byte* data, word32 len)
 
         #if defined(WOLFSSL_USE_ESP32WROOM32_CRYPT_HASH_HW)
             if (sha->ctx.mode == ESP32_SHA_INIT) {
-                ESP_LOGV("sha", "wc_ShaUpdate try hardware");
+                ESP_LOGV(TAG, "wc_ShaUpdate try hardware");
                 esp_sha_try_hw_lock(&sha->ctx);
             }
             if (sha->ctx.mode == ESP32_SHA_SW) {
-                ESP_LOGI("sha", "wc_ShaUpdate process software");
+                ESP_LOGI(TAG, "wc_ShaUpdate process software");
                 ret = XTRANSFORM(sha, (const byte*)local);
             }
             else {
-                ESP_LOGV("sha", "wc_ShaUpdate process hardware");
+                ESP_LOGV(TAG, "wc_ShaUpdate process hardware");
                 esp_sha_process(sha, (const byte*)local);
             }
         #elif defined (WOLFSSL_USE_ESP32C3_CRYPT_HASH_HW)
-           ESP_LOGI("sha", "wc_ShaUpdate not implemented for ESP32C3");
-           ret = XTRANSFORM(sha, (const byte*)local);
+            ESP_LOGI(TAG, "wc_ShaUpdate not implemented for ESP32C3");
+            ret = XTRANSFORM(sha, (const byte*)local);
         #else
             ret = XTRANSFORM(sha, (const byte*)local);
         #endif
@@ -815,10 +819,11 @@ int wc_ShaFinal(wc_Sha* sha, byte* hash)
         else {
             ret = esp_sha_process(sha, (const byte*)local);
         }
-    #elif defined(WOLFSSL_USE_ESP32C3_CRYPT_HASH_HW)
-        /* The ESP32C3 is different; SW crypto here. Not yet implemented  */
-        ret = XTRANSFORM(sha, (const byte*)local);
     #else
+        /*
+        ** The #if defined(WOLFSSL_USE_ESP32C3_CRYPT_HASH_HW) also falls
+        ** though here to SW, as it's not yet implemented for HW.
+        */
         ret = XTRANSFORM(sha, (const byte*)local);
     #endif
         if (ret != 0) {
@@ -860,9 +865,10 @@ int wc_ShaFinal(wc_Sha* sha, byte* hash)
     else {
         ret = esp_sha_digest_process(sha, 1);
     }
-#elif defined(WOLFSSL_USE_ESP32C3_CRYPT_HASH_HW)
-    /* The ESP32C3 is different; SW crypto here. Not yet implemented  */
-    ret = XTRANSFORM(sha, (const byte*)local);
+/*
+** The #if defined(WOLFSSL_USE_ESP32C3_CRYPT_HASH_HW) also falls
+** though here to SW, as it's not yet implemented for HW.
+*/
 #else
     ret = XTRANSFORM(sha, (const byte*)local);
 #endif
@@ -873,12 +879,12 @@ int wc_ShaFinal(wc_Sha* sha, byte* hash)
 
     XMEMCPY(hash, (byte *)&sha->digest[0], WC_SHA_DIGEST_SIZE);
 
-    ret = InitSha(sha); /* reset state */
+    (void)InitSha(sha); /* reset state */
 
     return ret;
 }
 
-#if defined(OPENSSL_EXTRA)
+#if defined(OPENSSL_EXTRA) || defined(HAVE_CURL)
 /* Apply SHA1 transformation to the data                  */
 /* @param sha  a pointer to wc_Sha structure              */
 /* @param data data to be applied SHA1 transformation     */
@@ -946,7 +952,7 @@ void wc_ShaFree(wc_Sha* sha)
 
 #if !defined(WOLFSSL_HAVE_PSA) || defined(WOLFSSL_PSA_NO_HASH)
 
-/* */
+/* wc_ShaGetHash get hash value */
 int wc_ShaGetHash(wc_Sha* sha, byte* hash)
 {
     int ret;
@@ -968,11 +974,9 @@ int wc_ShaGetHash(wc_Sha* sha, byte* hash)
     }
 #endif
 
-    /* copy this sha into tmpSha */
     ret = wc_ShaCopy(sha, tmpSha);
     if (ret == 0) {
         ret = wc_ShaFinal(tmpSha, hash);
-        wc_ShaFree(tmpSha); /* TODO move outside brackets? */
     }
 
 #ifdef WOLFSSL_SMALL_STACK
@@ -981,7 +985,6 @@ int wc_ShaGetHash(wc_Sha* sha, byte* hash)
 
     return ret;
 }
-
 
 int wc_ShaCopy(wc_Sha* src, wc_Sha* dst)
 {

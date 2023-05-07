@@ -40,9 +40,10 @@
  *      113: TSIPv1.13
  *      114: TSIPv1.14
  *      115: TSIPv1.15
+ *      117: TSIPv1.17
  *----------------------------------------------------------------------------*/
   #define WOLFSSL_RENESAS_TSIP
-  #define WOLFSSL_RENESAS_TSIP_VER     115
+  #define WOLFSSL_RENESAS_TSIP_VER     117
 
 #if defined(SIMPLE_TLS_CLIENT) || defined(SIMPLE_TLS_SERVER)
  #undef WOLFSSL_RENESAS_TSIP
@@ -75,6 +76,18 @@
     #define WOLFSSL_NO_SOCK
     #define WOLFSSL_USER_IO
 #endif
+
+/*-- Compiler related definitions  ---------------------------------------------
+ *
+ *  CC-RX is C99 compliant, but may not provide the features wolfSSL requires.
+ *  This section defines macros for such cases to avoid build-time or run-time
+ *  failures.
+ *
+ *----------------------------------------------------------------------------*/
+
+/* CC-RX does not support variable length array */
+#define WOLFSSL_SP_NO_DYN_STACK
+
 
 /*-- Cipher related definitions  -----------------------------------------------
  *
@@ -120,6 +133,11 @@
    * 
    */
   #define USE_ECC_CERT
+
+  /* Enable WOLFSSL_CHECK_SIG_FAULTS definition when self-verify for
+   * Ecc signature is required. It is disabled by default.
+   */
+  /*#define WOLFSSL_CHECK_SIG_FAULTS*/
 
   /* In this example application, Root CA cert buffer named 
    * "ca_ecc_cert_der_256" is used under the following macro definition 

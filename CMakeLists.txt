@@ -28,16 +28,16 @@ if("${CMAKE_SOURCE_DIR}" STREQUAL "${CMAKE_BINARY_DIR}")
      You must delete them, or cmake will refuse to work.")
 endif()
 
-project(wolfssl VERSION 5.5.4 LANGUAGES C ASM)
+project(wolfssl VERSION 5.6.0 LANGUAGES C ASM)
 
 # shared library versioning
 # increment if interfaces have been added, removed or changed
-set(LIBTOOL_CURRENT 38)
+set(LIBTOOL_CURRENT 39)
 # increment if source code has changed  set to zero if current is incremented
 set(LIBTOOL_REVISION 0)
 # increment if interfaces have been added set to zero if interfaces have been
 # removed or changed
-set(LIBTOOL_AGE 3)
+set(LIBTOOL_AGE 4)
 
 math(EXPR LIBTOOL_SO_VERSION "${LIBTOOL_CURRENT} - ${LIBTOOL_AGE}")
 set(LIBTOOL_FULL_VERSION ${LIBTOOL_SO_VERSION}.${LIBTOOL_AGE}.${LIBTOOL_REVISION})
@@ -1660,6 +1660,10 @@ add_option("WOLFSSL_USER_SETTINGS"
     "Use your own user_settings.h and do not add Makefile CFLAGS (default: disabled)"
     "no" "yes;no")
 
+add_option("WOLFSSL_USER_SETTINGS_ASM"
+    "Enable use of user_settings_asm.h in assembly files (default: disabled)"
+    "no" "yes;no")
+
 add_option("WOLFSSL_OPTFLAGS"
     "Enable default optimization CFLAGS for the compiler (default: enabled)"
     "yes" "yes;no")
@@ -1821,15 +1825,31 @@ generate_build_flags()
 # USER SETTINGS
 if(WOLFSSL_USER_SETTINGS)
     # Replace all options and just use WOLFSSL_USER_SETTINGS
-    set(WOLFSSL_DEFINITIONS "-DWOLFSSL_USER_SETTINGS
-        -DWOLFSSL_USER_SETTINGS_ASM")
+    set(WOLFSSL_DEFINITIONS "-DWOLFSSL_USER_SETTINGS")
+endif()
 
-    # Create user_settings_asm.h for use in assembly files (e.g. .S files).
-    execute_process(COMMAND $ENV{SHELL} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/user_settings_asm.sh
-                            "${CMAKE_C_FLAGS} ${CMAKE_CXX_FLAGS}"
-                    RESULT_VARIABLE USER_SETTINGS_ASM_RET)
-    if (NOT USER_SETTINGS_ASM_RET EQUAL 0)
-        message(FATAL_ERROR "${CMAKE_CURRENT_SOURCE_DIR}/scripts/user_settings_asm.sh failed.")
+if(WOLFSSL_USER_SETTINGS_ASM)
+    if(WOLFSSL_USER_SETTINGS)
+        list(APPEND WOLFSSL_DEFINITIONS "-DWOLFSSL_USER_SETTINGS_ASM")
+        # Create user_settings_asm.h for use in assembly files (e.g. .S files).
+        if(WIN32)
+            execute_process(COMMAND
+            $ENV{SHELL} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/user_settings_asm.sh
+            "${CMAKE_C_FLAGS} ${CMAKE_CXX_FLAGS}"
+            RESULT_VARIABLE USER_SETTINGS_ASM_RET)
+        else()
+            execute_process(COMMAND
+            ${CMAKE_CURRENT_SOURCE_DIR}/scripts/user_settings_asm.sh
+            "${CMAKE_C_FLAGS} ${CMAKE_CXX_FLAGS}"
+            RESULT_VARIABLE USER_SETTINGS_ASM_RET)
+        endif()
+        if (NOT USER_SETTINGS_ASM_RET EQUAL 0)
+            message(FATAL_ERROR
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/user_settings_asm.sh failed.")
+        endif()
+    else()
+        message(FATAL_ERROR
+        "Must have WOLFSSL_USER_SETTINGS to enable WOLFSSL_USER_SETTINGS_ASM.")
     endif()
 endif()
 

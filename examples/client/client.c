@@ -66,11 +66,8 @@ static const char *wolfsentry_config_path = NULL;
 #include <wolfssl/certs_test.h>
 #endif
 
-#ifdef USE_FAST_MATH
-    /* included to inspect the size of FP_MAX_BITS */
-    /* need integer.h header to make sure right math version used */
-    #include <wolfssl/wolfcrypt/integer.h>
-#endif
+#include <wolfssl/wolfcrypt/wolfmath.h> /* for max bits */
+
 #ifdef HAVE_ECC
     #include <wolfssl/wolfcrypt/ecc.h>
 #endif
@@ -785,8 +782,8 @@ static int ClientBenchmarkThroughput(WOLFSSL_CTX* ctx, char* host, word16 port,
             err_sys("Client buffer malloc failed");
         }
 doExit:
-        if (tx_buffer) XFREE(tx_buffer, NULL, DYNAMIC_TYPE_TMP_BUFFER);
-        if (rx_buffer) XFREE(rx_buffer, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        XFREE(tx_buffer, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        XFREE(rx_buffer, NULL, DYNAMIC_TYPE_TMP_BUFFER);
     }
     else {
         err_sys("wolfSSL_connect failed");
@@ -956,7 +953,6 @@ static int ClientWrite(WOLFSSL* ssl, const char* msg, int msgSz, const char* str
     int exitWithRet)
 {
     int ret, err;
-    char buffer[WOLFSSL_MAX_ERROR_SZ];
 
     do {
         err = 0; /* reset error */
@@ -977,6 +973,7 @@ static int ClientWrite(WOLFSSL* ssl, const char* msg, int msgSz, const char* str
     #endif
     );
     if (ret != msgSz) {
+        char buffer[WOLFSSL_MAX_ERROR_SZ];
         fprintf(stderr, "SSL_write%s msg error %d, %s\n", str, err,
                                         wolfSSL_ERR_error_string(err, buffer));
         if (!exitWithRet) {
@@ -1264,9 +1261,12 @@ static const char* client_usage_msg[][70] = {
 #ifdef HAVE_SUPPORTED_CURVES
         "--onlyPskDheKe Must use DHE key exchange with PSK\n",          /* 73 */
 #endif
+#ifndef NO_PSK
+        "--openssl-psk  Use TLS 1.3 PSK callback compatible with OpenSSL\n", /* 74 */
+#endif
         "\n"
            "For simpler wolfSSL TLS client examples, visit\n"
-           "https://github.com/wolfSSL/wolfssl-examples/tree/master/tls\n", /* 74 */
+           "https://github.com/wolfSSL/wolfssl-examples/tree/master/tls\n", /* 75 */
         NULL,
     },
 #ifndef NO_MULTIBYTE_PRINT
@@ -1485,10 +1485,13 @@ static const char* client_usage_msg[][70] = {
 #ifdef HAVE_SUPPORTED_CURVES
         "--onlyPskDheKe Must use DHE key exchange with PSK\n",          /* 73 */
 #endif
+#ifndef NO_PSK
+        "--openssl-psk  Use TLS 1.3 PSK callback compatible with OpenSSL\n", /* 74 */
+#endif
         "\n"
         "より簡単なwolfSSL TSL クライアントの例については"
                                          "下記にアクセスしてください\n"
-        "https://github.com/wolfSSL/wolfssl-examples/tree/master/tls\n", /* 74 */
+        "https://github.com/wolfSSL/wolfssl-examples/tree/master/tls\n", /* 75 */
         NULL,
     },
 #endif
@@ -1856,12 +1859,16 @@ THREAD_RETURN WOLFSSL_THREAD client_test(void* args)
 #ifdef HAVE_SUPPORTED_CURVES
         { "onlyPskDheKe", 0, 264 },
 #endif
+#ifndef NO_PSK
+        { "openssl-psk", 0, 265 },
+#endif
         { 0, 0, 0 }
     };
 #endif
     int    version = CLIENT_INVALID_VERSION;
     int    minVersion = CLIENT_INVALID_VERSION;
     int    usePsk   = 0;
+    int    opensslPsk = 0;
     int    useAnon  = 0;
     int    sendGET  = 0;
     int    benchmark = 0;
@@ -2069,6 +2076,7 @@ THREAD_RETURN WOLFSSL_THREAD client_test(void* args)
     (void)loadCertKeyIntoSSLObj;
     (void)usePqc;
     (void)pqcAlg;
+    (void)opensslPsk;
     StackTrap();
 
     /* Reinitialize the global myVerifyAction. */
@@ -2683,6 +2691,11 @@ THREAD_RETURN WOLFSSL_THREAD client_test(void* args)
                 #endif
 #endif
                 break;
+            case 265:
+#ifndef NO_PSK
+                opensslPsk = 1;
+#endif
+                break;
             default:
                 Usage();
                 XEXIT_T(MY_EX_USAGE);
@@ -3063,10 +3076,15 @@ THREAD_RETURN WOLFSSL_THREAD client_test(void* args)
         wolfSSL_CTX_set_psk_client_callback(ctx, my_psk_client_cb);
 #ifdef WOLFSSL_TLS13
     #if !defined(WOLFSSL_PSK_TLS13_CB) && !defined(WOLFSSL_PSK_ONE_ID)
-        wolfSSL_CTX_set_psk_client_cs_callback(ctx, my_psk_client_cs_cb);
-    #else
-        wolfSSL_CTX_set_psk_client_tls13_callback(ctx, my_psk_client_tls13_cb);
+        if (!opensslPsk) {
+            wolfSSL_CTX_set_psk_client_cs_callback(ctx, my_psk_client_cs_cb);
+        }
+        else
     #endif
+        {
+            wolfSSL_CTX_set_psk_client_tls13_callback(ctx,
+                my_psk_client_tls13_cb);
+        }
 #endif
         if (defaultCipherList == NULL) {
         #if defined(HAVE_AESGCM) && !defined(NO_DH)
@@ -4314,9 +4332,7 @@ THREAD_RETURN WOLFSSL_THREAD client_test(void* args)
 
 #if !defined(NO_SESSION_CACHE) && (defined(OPENSSL_EXTRA) || \
         defined(HAVE_EXT_CACHE))
-        if (flatSession) {
-            XFREE(flatSession, NULL, DYNAMIC_TYPE_TMP_BUFFER);
-        }
+        XFREE(flatSession, NULL, DYNAMIC_TYPE_TMP_BUFFER);
 #endif
         wolfSSL_SESSION_free(session);
         session = NULL;

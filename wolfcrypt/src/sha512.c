@@ -26,11 +26,6 @@
 
 #include <wolfssl/wolfcrypt/settings.h>
 
-/* TODO where best to put this? */
-#define USE_SHA_SOFTWARE_IMPL
-
-
-
 #if (defined(WOLFSSL_SHA512) || defined(WOLFSSL_SHA384)) && !defined(WOLFSSL_ARMASM) && !defined(WOLFSSL_PSOC6_CRYPTO)
 
 /* determine if we are using Espressif SHA hardware acceleration */
@@ -43,6 +38,7 @@
      * but individual components can be turned off.
      */
     #define WOLFSSL_USE_ESP32WROOM32_CRYPT_HASH_HW
+    static const char* TAG = "wc_sha_512";
 #else
     #undef WOLFSSL_USE_ESP32WROOM32_CRYPT_HASH_HW
 #endif
@@ -502,7 +498,7 @@ static int InitSha512_256(wc_Sha512* sha512)
     static int (*Transform_Sha512_p)(wc_Sha512* sha512) = _Transform_Sha512;
     static int (*Transform_Sha512_Len_p)(wc_Sha512* sha512, word32 len) = NULL;
     static int transform_check = 0;
-    static int intel_flags;
+    static word32 intel_flags;
     static int Transform_Sha512_is_vectorized = 0;
 
     static WC_INLINE int Transform_Sha512(wc_Sha512 *sha512) {
@@ -621,6 +617,10 @@ static int InitSha512_Family(wc_Sha512* sha512, void* heap, int devId,
 int wc_InitSha512_ex(wc_Sha512* sha512, void* heap, int devId)
 {
 #if defined(WOLFSSL_USE_ESP32WROOM32_CRYPT_HASH_HW)
+    if (sha512->ctx.mode != ESP32_SHA_INIT) {
+        ESP_LOGV(TAG, "Set ctx mode from prior value: "
+                      "%d", sha512->ctx.mode);
+    }
     /* We know this is a fresh, uninitialized item, so set to INIT */
     sha512->ctx.mode = ESP32_SHA_INIT;
 #endif
@@ -866,7 +866,7 @@ static WC_INLINE int Sha512Update(wc_Sha512* sha512, const byte* data, word32 le
 #if defined(USE_INTEL_SPEEDUP) && \
     (defined(HAVE_INTEL_AVX1) || defined(HAVE_INTEL_AVX2))
     if (Transform_Sha512_Len_p != NULL) {
-        word32 blocksLen = len & ~(WC_SHA512_BLOCK_SIZE-1);
+        word32 blocksLen = len & ~((word32)WC_SHA512_BLOCK_SIZE-1);
 
         if (blocksLen > 0) {
             sha512->data = data;
@@ -928,7 +928,7 @@ static WC_INLINE int Sha512Update(wc_Sha512* sha512, const byte* data, word32 le
             else {
                 ret = esp_sha512_process(sha512);
             }
-#endif
+    #endif
             if (ret != 0)
                 break;
         } /* while (len >= WC_SHA512_BLOCK_SIZE) */
@@ -1102,7 +1102,6 @@ static WC_INLINE int Sha512Final(wc_Sha512* sha512)
         ByteReverseWords64(sha512->digest, sha512->digest, WC_SHA512_DIGEST_SIZE);
     #endif
 
-
     return 0;
 }
 
@@ -1116,7 +1115,7 @@ static WC_INLINE int Sha512Final(wc_Sha512* sha512)
 
 #else
 
-static int Sha512FinalRaw(wc_Sha512* sha512, byte* hash, int digestSz)
+static int Sha512FinalRaw(wc_Sha512* sha512, byte* hash, size_t digestSz)
 {
 #ifdef LITTLE_ENDIAN_ORDER
     word64 digest[WC_SHA512_DIGEST_SIZE / sizeof(word64)];
@@ -1142,7 +1141,7 @@ int wc_Sha512FinalRaw(wc_Sha512* sha512, byte* hash)
     return Sha512FinalRaw(sha512, hash, WC_SHA512_DIGEST_SIZE);
 }
 
-static int Sha512_Family_Final(wc_Sha512* sha512, byte* hash, int digestSz,
+static int Sha512_Family_Final(wc_Sha512* sha512, byte* hash, size_t digestSz,
                                int (*initfp)(wc_Sha512*))
 {
     int ret;
@@ -1153,9 +1152,12 @@ static int Sha512_Family_Final(wc_Sha512* sha512, byte* hash, int digestSz,
 
 #ifdef WOLF_CRYPTO_CB
     if (sha512->devId != INVALID_DEVID) {
-        ret = wc_CryptoCb_Sha512Hash(sha512, NULL, 0, hash);
-        if (ret != CRYPTOCB_UNAVAILABLE)
+        byte localHash[WC_SHA512_DIGEST_SIZE];
+        ret = wc_CryptoCb_Sha512Hash(sha512, NULL, 0, localHash);
+        if (ret != CRYPTOCB_UNAVAILABLE) {
+            XMEMCPY(hash, localHash, digestSz);
             return ret;
+        }
         /* fall-through when unavailable */
     }
 #endif
@@ -1222,11 +1224,8 @@ void wc_Sha512Free(wc_Sha512* sha512)
     wolfAsync_DevCtxFree(&sha512->asyncDev, WOLFSSL_ASYNC_MARKER_SHA512);
 #endif /* WOLFSSL_ASYNC_CRYPT */
 }
-
-
-
-
-#if defined(OPENSSL_EXTRA) && !defined(WOLFSSL_KCAPI_HASH)
+#if (defined(OPENSSL_EXTRA) || defined(HAVE_CURL)) \
+    && !defined(WOLFSSL_KCAPI_HASH)
 /* Apply SHA512 transformation to the data                */
 /* @param sha  a pointer to wc_Sha512 structure           */
 /* @param data data to be applied SHA512 transformation   */
@@ -1466,10 +1465,10 @@ int wc_InitSha384_ex(wc_Sha384* sha384, void* heap, int devId)
     sha384->devCtx = NULL;
 #endif
 #if defined(WOLFSSL_USE_ESP32WROOM32_CRYPT_HASH_HW)
-        if (sha384->ctx.mode != ESP32_SHA_INIT) {
-            ESP_LOGV("SHA384", "Set ctx mode from prior value: "
-                               "%d", sha384->ctx.mode);
-        }
+    if (sha384->ctx.mode != ESP32_SHA_INIT) {
+        ESP_LOGV(TAG, "Set ctx mode from prior value: "
+                           "%d", sha384->ctx.mode);
+    }
     /* We know this is a fresh, uninitialized item, so set to INIT */
     sha384->ctx.mode = ESP32_SHA_INIT;
 #endif
@@ -1596,8 +1595,9 @@ int wc_Sha512Copy(wc_Sha512* src, wc_Sha512* dst)
 {
     int ret = 0;
 
-    if (src == NULL || dst == NULL)
+    if (src == NULL || dst == NULL) {
         return BAD_FUNC_ARG;
+    }
 
     XMEMCPY(dst, src, sizeof(wc_Sha512));
 #ifdef WOLFSSL_SMALL_STACK_CACHE
@@ -1613,8 +1613,10 @@ int wc_Sha512Copy(wc_Sha512* src, wc_Sha512* dst)
     ret = wolfAsync_DevCopy(&src->asyncDev, &dst->asyncDev);
 #endif
 
-#if  defined(WOLFSSL_USE_ESP32WROOM32_CRYPT_HASH_HW)
-    esp_sha512_ctx_copy(src, dst);
+#if defined(WOLFSSL_USE_ESP32WROOM32_CRYPT_HASH_HW)
+    if (ret == 0) {
+        ret = esp_sha512_ctx_copy(src, dst);
+    }
 #endif
 
 #ifdef WOLFSSL_HASH_FLAGS
@@ -1716,7 +1718,7 @@ int wc_Sha512_224GetFlags(wc_Sha512* sha, word32* flags)
 }
 #endif /* WOLFSSL_HASH_FLAGS */
 
-#if defined(OPENSSL_EXTRA)
+#if defined(OPENSSL_EXTRA) || defined(HAVE_CURL)
 int wc_Sha512_224Transform(wc_Sha512* sha, const unsigned char* data)
 {
     return wc_Sha512Transform(sha, data);
@@ -1785,7 +1787,7 @@ int wc_Sha512_256GetFlags(wc_Sha512* sha, word32* flags)
 }
 #endif /* WOLFSSL_HASH_FLAGS */
 
-#if defined(OPENSSL_EXTRA)
+#if defined(OPENSSL_EXTRA) || defined(HAVE_CURL)
 int wc_Sha512_256Transform(wc_Sha512* sha, const unsigned char* data)
 {
     return wc_Sha512Transform(sha, data);

@@ -7,7 +7,7 @@
     </CustomSourceDirectories>
     <AutoProgramSPIFFSPartition>true</AutoProgramSPIFFSPartition>
     <ProjectModeSettings>
-      <ProjectGUID>35e5525f-318a-466e-a8c7-36548547d801</ProjectGUID>
+      <ProjectGUID>7bbd1486-d457-4e49-92ba-0cfc9d80849e</ProjectGUID>
       <GroupSourcesByTypes>true</GroupSourcesByTypes>
       <GroupSourcesByPaths>true</GroupSourcesByPaths>
       <HeaderScanMode>SourceDirs</HeaderScanMode>
@@ -104,7 +104,7 @@
     </Connection>
     <LastConnectionTime>0</LastConnectionTime>
     <EchoTypedCharacters>false</EchoTypedCharacters>
-    <ClearContentsWhenReconnecting>true</ClearContentsWhenReconnecting>
+    <ClearContentsWhenReconnecting>false</ClearContentsWhenReconnecting>
     <ReconnectAutomatically>false</ReconnectAutomatically>
     <DisplayMode>ASCII</DisplayMode>
     <Colors>
@@ -222,7 +222,11 @@
       <InterfaceID>esp_usb_jtag</InterfaceID>
       <InterfaceSerialNumber>7C:00:00:00:00:00</InterfaceSerialNumber>
       <Configuration xsi:type="com.visualgdb.edp.openocd.settings.esp32">
+<<<<<<<< HEAD:IDE/Espressif/ESP-IDF/examples/wolfssl_benchmark/VisualGDB/wolfssl_benchmark_IDF_v4.4_ESP32.vgdbproj
+        <CommandLine>-f interface/tigard.cfg -c "adapter_khz 15000" -f target/esp32.cfg</CommandLine>
+========
         <CommandLine>-f interface/esp_usb_jtag.cfg -f target/esp32s3.cfg</CommandLine>
+>>>>>>>> Wolf/master:IDE/Espressif/ESP-IDF/examples/wolfssl_test/VisualGDB/wolfssl_test_IDF_v5_ESP32S3.vgdbproj
         <ExtraParameters>
           <Frequency xsi:nil="true" />
           <BoostedFrequency xsi:nil="true" />
@@ -254,7 +258,7 @@
       </Configuration>
     </DebugMethod>
     <AutoDetectRTOS>true</AutoDetectRTOS>
-    <SemihostingSupport>Auto</SemihostingSupport>
+    <SemihostingSupport>Disabled</SemihostingSupport>
     <SemihostingPollingDelay>0</SemihostingPollingDelay>
     <StepIntoEntryPoint>false</StepIntoEntryPoint>
     <ReloadFirmwareOnReset>false</ReloadFirmwareOnReset>

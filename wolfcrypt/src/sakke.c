@@ -44,6 +44,12 @@
 #include <wolfssl/wolfcrypt/sakke.h>
 #include <wolfssl/wolfcrypt/asn_public.h>
 
+#ifndef WOLFSSL_HAVE_ECC_KEY_GET_PRIV
+    /* FIPS build has replaced ecc.h. */
+    #define wc_ecc_key_get_priv(key) (&((key)->k))
+    #define WOLFSSL_HAVE_ECC_KEY_GET_PRIV
+#endif
+
 /* SAKKE Build Options:
  * WOLFSSL_SAKKE_SMALL:          Small code size version of SAKKE.
  * WOLFSSL_SAKKE_SMALL_MODEXP:   Small code size for just SAKKE modexp.
@@ -515,17 +521,19 @@ int wc_MakeSakkeKey(SakkeKey* key, WC_RNG* rng)
                 err = RNG_FAILURE_E;
             }
             if (err == 0) {
-                err = mp_rand(&key->ecc.k, digits, rng);
+                err = mp_rand(wc_ecc_key_get_priv(&key->ecc), digits, rng);
             }
             if (err == 0) {
-                err = mp_mod(&key->ecc.k, &key->params.q, &key->ecc.k);
+                err = mp_mod(wc_ecc_key_get_priv(&key->ecc), &key->params.q,
+                    wc_ecc_key_get_priv(&key->ecc));
             }
         }
-        while ((err == 0) && mp_iszero(&key->ecc.k));
+        while ((err == 0) && mp_iszero(wc_ecc_key_get_priv(&key->ecc)));
     }
     if (err == 0) {
         /* Calculate public key by multiply master secret by base point. */
-        err = sakke_mulmod_base(key, &key->ecc.k, &key->ecc.pubkey, 1);
+        err = sakke_mulmod_base(key, wc_ecc_key_get_priv(&key->ecc),
+            &key->ecc.pubkey, 1);
     }
     if (err == 0) {
         key->ecc.type = ECC_PRIVATEKEY;
@@ -561,7 +569,7 @@ int wc_MakeSakkePublicKey(SakkeKey* key, ecc_point* pub)
         err = sakke_load_base_point(key);
     }
     if (err == 0) {
-        err = sakke_mulmod_base(key, &key->ecc.k, pub, 1);
+        err = sakke_mulmod_base(key, wc_ecc_key_get_priv(&key->ecc), pub, 1);
     }
 
     return err;
@@ -601,7 +609,7 @@ int wc_ExportSakkeKey(SakkeKey* key, byte* data, word32* sz)
     }
     if (err == 0) {
         /* Write out the secret value into key size bytes. */
-        err = mp_to_unsigned_bin_len(&key->ecc.k, data, key->ecc.dp->size);
+        err = mp_to_unsigned_bin_len(wc_ecc_key_get_priv(&key->ecc), data, key->ecc.dp->size);
     }
     if (err == 0) {
         data += key->ecc.dp->size;
@@ -651,7 +659,8 @@ int wc_ImportSakkeKey(SakkeKey* key, const byte* data, word32 sz)
 
     if (err == 0) {
         /* Read the secret value from key size bytes. */
-        err = mp_read_unsigned_bin(&key->ecc.k, data, key->ecc.dp->size);
+        err = mp_read_unsigned_bin(wc_ecc_key_get_priv(&key->ecc), data,
+            key->ecc.dp->size);
     }
     if (err == 0) {
         data += key->ecc.dp->size;
@@ -706,7 +715,8 @@ int wc_ExportSakkePrivateKey(SakkeKey* key, byte* data, word32* sz)
     }
     if (err == 0) {
         /* Write out the secret value into key size bytes. */
-        err = mp_to_unsigned_bin_len(&key->ecc.k, data, key->ecc.dp->size);
+        err = mp_to_unsigned_bin_len(wc_ecc_key_get_priv(&key->ecc), data,
+            key->ecc.dp->size);
     }
     if (err == 0) {
         *sz = key->ecc.dp->size;
@@ -745,7 +755,8 @@ int wc_ImportSakkePrivateKey(SakkeKey* key, const byte* data, word32 sz)
 
     if (err == 0) {
         /* Read the secret value from key size bytes. */
-        err = mp_read_unsigned_bin(&key->ecc.k, data, key->ecc.dp->size);
+        err = mp_read_unsigned_bin(wc_ecc_key_get_priv(&key->ecc), data,
+            key->ecc.dp->size);
     }
 
     return err;
@@ -972,7 +983,7 @@ int wc_MakeSakkeRsk(SakkeKey* key, const byte* id, word16 idSz, ecc_point* rsk)
     }
     /* a + z_T */
     if (err == 0) {
-        err = mp_addmod(a, &key->ecc.k, &key->params.q, a);
+        err = mp_addmod(a, wc_ecc_key_get_priv(&key->ecc), &key->params.q, a);
     }
     /* (a + z_T) ^ 1 modulo q */
     if (err == 0) {
@@ -2228,10 +2239,13 @@ static int sakke_pairing(SakkeKey* key, ecc_point* p, ecc_point* q, mp_int* r,
     mp_proj* t2 = key->tmp.p3;
     mp_int* t3 = &key->tmp.m2;
     mp_int* prime = &key->params.prime;
-    mp_int* t[] = { &key->tmp.m1, t3 };
+    mp_int* t[2];
     int i;
     mp_digit mp = 0;
     SakkeKeyParams* params = &key->params;
+
+    t[0] = &key->tmp.m1;
+    t[1] = t3;
 
     (void)table;
     (void)len;
@@ -2358,7 +2372,7 @@ static int sakke_compute_point_i(SakkeKey* key, const byte* id, word16 idSz,
         ecc_point* i)
 {
     int err;
-    mp_int* b = &key->ecc.k;
+    mp_int* b = wc_ecc_key_get_priv(&key->ecc);
 
     /* Load b - ID of receiver */
     err = mp_read_unsigned_bin(b, id, idSz);
@@ -2575,15 +2589,24 @@ static int sakke_modexp_loop(SakkeKey* key, mp_int* b, mp_int* e, mp_proj* r,
 {
     int err;
 #ifdef WC_NO_CACHE_RESISTANT
-    mp_proj* c[2] = { r, key->tmp.p2 };
+    mp_proj* c[2];
 #else
-    mp_proj* c[3] = { r, key->tmp.p3, key->tmp.p2 };
+    mp_proj* c[3];
 #endif
     mp_int* t1 = &key->tmp.m1;
     mp_int* t2 = &key->tmp.m2;
     mp_int* by = key->tmp.p1->z;
     mp_int* prime = &key->params.prime;
     int i;
+
+#ifdef WC_NO_CACHE_RESISTANT
+    c[0] = r;
+    c[1] = key->tmp.p2;
+#else
+    c[0] = r;
+    c[1] = key->tmp.p3;
+    c[2] = key->tmp.p2;
+#endif
 
     /* Set the working value to the base in PF_p[q] */
     err = mp_montgomery_calc_normalization(c[0]->x, prime);
@@ -6124,9 +6147,7 @@ static void sakke_xor_in_v(const byte* v, word32 hashSz, byte* out, int idx,
         i = 0;
     }
     o = i;
-    for (; i < hashSz; i++) {
-        out[idx + i - o] ^= v[i];
-    }
+    xorbuf(out + idx + i - o, v + i, hashSz - i);
 }
 
 /*

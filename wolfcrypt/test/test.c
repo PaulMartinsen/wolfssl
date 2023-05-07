@@ -232,11 +232,10 @@
 #include <wolfssl/wolfcrypt/sha512.h>
 #include <wolfssl/wolfcrypt/rc2.h>
 #include <wolfssl/wolfcrypt/arc4.h>
-#if defined(WC_NO_RNG)
-    #include <wolfssl/wolfcrypt/integer.h>
-#else
+#if !defined(WC_NO_RNG)
     #include <wolfssl/wolfcrypt/random.h>
 #endif
+#include <wolfssl/wolfcrypt/wolfmath.h>
 #include <wolfssl/wolfcrypt/coding.h>
 #include <wolfssl/wolfcrypt/signature.h>
 #include <wolfssl/wolfcrypt/rsa.h>
@@ -360,6 +359,12 @@
 
 #ifdef DEVKITPRO
     #include <wiiuse/wpad.h>
+#endif
+
+#ifndef WOLFSSL_HAVE_ECC_KEY_GET_PRIV
+    /* FIPS build has replaced ecc.h. */
+    #define wc_ecc_key_get_priv(key) (&((key)->k))
+    #define WOLFSSL_HAVE_ECC_KEY_GET_PRIV
 #endif
 
 #ifdef WOLFSSL_STATIC_MEMORY
@@ -656,7 +661,8 @@ static void render_error_message(const char* msg, int es)
  * infelicitous...
  */
 #if !defined(STRING_USER) && !defined(NO_ERROR_STRINGS) &&      \
-    (defined(_GNU_SOURCE) || defined(__USE_GNU) ||              \
+    (defined(__STDC_VERSION__) && (__STDC_VERSION__ > 199901L)) &&      \
+    ((defined(__GLIBC__) && (__GLIBC__ >= 2)) ||                \
      (defined(__USE_XOPEN2K) &&                                 \
       defined(_POSIX_C_SOURCE) &&                               \
       (_POSIX_C_SOURCE >= 200112L)))
@@ -763,6 +769,22 @@ static int wolfssl_pb_print(const char* msg, ...)
 }
 #endif /* WOLFSSL_PB */
 
+
+#if defined(WOLF_CRYPTO_CB) && !defined(HAVE_HASHDRBG) && \
+    !defined(WC_NO_RNG) && !defined(CUSTOM_RAND_GENERATE_BLOCK)
+/* Enable support for RNG with crypto callback */
+static int rng_crypto_cb(int thisDevId, wc_CryptoInfo* info, void* ctx)
+{
+    int rc = CRYPTOCB_UNAVAILABLE;
+    if (info->algo_type == WC_ALGO_TYPE_RNG) {
+        rc = wc_GenerateSeed(&info->rng.rng->seed, info->rng.out, info->rng.sz);
+    }
+    (void)ctx;
+    (void)thisDevId;
+    return rc;
+}
+#endif
+
 /* optional macro to add sleep between tests */
 #ifndef TEST_SLEEP
 #define TEST_SLEEP()
@@ -794,6 +816,12 @@ static int wolfssl_pb_print(const char* msg, ...)
     }
 #endif
 
+#ifdef TEST_ALWAYS_RUN_TO_END
+    #define TEST_FAIL(msg, retval) do { last_failed_test_ret = (retval); render_error_message(msg, retval); } while (0)
+#elif !defined(TEST_FAIL)
+    #define TEST_FAIL(msg, retval) return err_sys(msg, retval)
+#endif
+
 #ifdef HAVE_STACK_SIZE
 THREAD_RETURN WOLFSSL_THREAD wolfcrypt_test(void* args)
 #else
@@ -803,6 +831,9 @@ int wolfcrypt_test(void* args)
     int ret;
 #ifdef WOLFSSL_TRACK_MEMORY_VERBOSE
     long heap_baselineAllocs, heap_baselineBytes;
+#endif
+#ifdef TEST_ALWAYS_RUN_TO_END
+    int last_failed_test_ret = 0;
 #endif
     STACK_SIZE_INIT();
 
@@ -921,31 +952,41 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
 #endif
 #endif
 
+#if defined(WOLF_CRYPTO_CB) && !defined(HAVE_HASHDRBG) && \
+    !defined(WC_NO_RNG) && !defined(CUSTOM_RAND_GENERATE_BLOCK)
+    if (devId == INVALID_DEVID) {
+        /* for testing RNG with crypto callback register function */
+        devId = 100; /* any value beside -2 (INVALID_DEVID) */
+        wc_CryptoCb_RegisterDevice(devId, rng_crypto_cb, NULL);
+    }
+#endif
+
+
 #ifdef HAVE_SELFTEST
     if ( (ret = wolfCrypt_SelfTest()) != 0)
-        return err_sys("CAVP selftest failed!\n", ret);
+        TEST_FAIL("CAVP selftest failed!\n", ret);
     else
         TEST_PASS("CAVP selftest passed!\n");
 #endif
 
     if ( (ret = error_test()) != 0)
-        return err_sys("error    test failed!\n", ret);
+        TEST_FAIL("error    test failed!\n", ret);
     else
         TEST_PASS("error    test passed!\n");
 
     if ( (ret = memory_test()) != 0)
-        return err_sys("MEMORY   test failed!\n", ret);
+        TEST_FAIL("MEMORY   test failed!\n", ret);
     else
         TEST_PASS("MEMORY   test passed!\n");
 
 #ifndef NO_CODING
     if ( (ret = base64_test()) != 0)
-        return err_sys("base64   test failed!\n", ret);
+        TEST_FAIL("base64   test failed!\n", ret);
     else
         TEST_PASS("base64   test passed!\n");
 #ifdef WOLFSSL_BASE16
     if ( (ret = base16_test()) != 0)
-        return err_sys("base16   test failed!\n", ret);
+        TEST_FAIL("base16   test failed!\n", ret);
     else
         TEST_PASS("base16   test passed!\n");
 #endif
@@ -953,70 +994,70 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
 
 #ifndef NO_ASN
     if ( (ret = asn_test()) != 0)
-        return err_sys("asn      test failed!\n", ret);
+        TEST_FAIL("asn      test failed!\n", ret);
     else
         TEST_PASS("asn      test passed!\n");
 #endif
 
 #ifndef WC_NO_RNG
     if ( (ret = random_test()) != 0)
-        return err_sys("RANDOM   test failed!\n", ret);
+        TEST_FAIL("RANDOM   test failed!\n", ret);
     else
         TEST_PASS("RANDOM   test passed!\n");
 #endif /* WC_NO_RNG */
 
 #ifndef NO_MD5
     if ( (ret = md5_test()) != 0)
-        return err_sys("MD5      test failed!\n", ret);
+        TEST_FAIL("MD5      test failed!\n", ret);
     else
         TEST_PASS("MD5      test passed!\n");
 #endif
 
 #ifdef WOLFSSL_MD2
     if ( (ret = md2_test()) != 0)
-        return err_sys("MD2      test failed!\n", ret);
+        TEST_FAIL("MD2      test failed!\n", ret);
     else
         TEST_PASS("MD2      test passed!\n");
 #endif
 
 #ifndef NO_MD4
     if ( (ret = md4_test()) != 0)
-        return err_sys("MD4      test failed!\n", ret);
+        TEST_FAIL("MD4      test failed!\n", ret);
     else
         TEST_PASS("MD4      test passed!\n");
 #endif
 
 #ifndef NO_SHA
     if ( (ret = sha_test()) != 0)
-        return err_sys("SHA      test failed!\n", ret);
+        TEST_FAIL("SHA      test failed!\n", ret);
     else
         TEST_PASS("SHA      test passed!\n");
 #endif
 
 #ifdef WOLFSSL_SHA224
     if ( (ret = sha224_test()) != 0)
-        return err_sys("SHA-224  test failed!\n", ret);
+        TEST_FAIL("SHA-224  test failed!\n", ret);
     else
         TEST_PASS("SHA-224  test passed!\n");
 #endif
 
 #ifndef NO_SHA256
     if ( (ret = sha256_test()) != 0)
-        return err_sys("SHA-256  test failed!\n", ret);
+        TEST_FAIL("SHA-256  test failed!\n", ret);
     else
         TEST_PASS("SHA-256  test passed!\n");
 #endif
 
 #ifdef WOLFSSL_SHA384
     if ( (ret = sha384_test()) != 0)
-        return err_sys("SHA-384  test failed!\n", ret);
+        TEST_FAIL("SHA-384  test failed!\n", ret);
     else
         TEST_PASS("SHA-384  test passed!\n");
 #endif
 
 #ifdef WOLFSSL_SHA512
     if ((ret = sha512_test()) != 0) {
-        return err_sys("SHA-512  test failed!\n", ret);
+        TEST_FAIL("SHA-512  test failed!\n", ret);
     }
     else {
         TEST_PASS("SHA-512  test passed!\n");
@@ -1025,7 +1066,7 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
 #if !defined(WOLFSSL_NOSHA512_224) && \
    (!defined(HAVE_FIPS) || FIPS_VERSION_GE(5, 3)) && !defined(HAVE_SELFTEST)
     if ((ret = sha512_224_test()) != 0) {
-        return err_sys("SHA-512/224  test failed!\n", ret);
+        TEST_FAIL("SHA-512/224  test failed!\n", ret);
     }
     else
         TEST_PASS("SHA-512/224  test passed!\n");
@@ -1034,7 +1075,7 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
 #if !defined(WOLFSSL_NOSHA512_256) && \
    (!defined(HAVE_FIPS) || FIPS_VERSION_GE(5, 3)) && !defined(HAVE_SELFTEST)
     if ((ret = sha512_256_test()) != 0) {
-        return err_sys("SHA-512/256  test failed!\n", ret);
+        TEST_FAIL("SHA-512/256  test failed!\n", ret);
     }
     else
         TEST_PASS("SHA-512/256  test passed!\n");
@@ -1044,48 +1085,48 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
 
 #ifdef WOLFSSL_SHA3
     if ( (ret = sha3_test()) != 0)
-        return err_sys("SHA-3    test failed!\n", ret);
+        TEST_FAIL("SHA-3    test failed!\n", ret);
     else
         TEST_PASS("SHA-3    test passed!\n");
 #endif
 
 #ifdef WOLFSSL_SHAKE128
     if ( (ret = shake128_test()) != 0)
-        return err_sys("SHAKE128 test failed!\n", ret);
+        TEST_FAIL("SHAKE128 test failed!\n", ret);
     else
         TEST_PASS("SHAKE128 test passed!\n");
 #endif
 
 #ifdef WOLFSSL_SHAKE256
     if ( (ret = shake256_test()) != 0)
-        return err_sys("SHAKE256 test failed!\n", ret);
+        TEST_FAIL("SHAKE256 test failed!\n", ret);
     else
         TEST_PASS("SHAKE256 test passed!\n");
 #endif
 
 #ifndef NO_HASH_WRAPPER
     if ( (ret = hash_test()) != 0)
-        return err_sys("Hash     test failed!\n", ret);
+        TEST_FAIL("Hash     test failed!\n", ret);
     else
         TEST_PASS("Hash     test passed!\n");
 #endif
 
 #ifdef WOLFSSL_RIPEMD
     if ( (ret = ripemd_test()) != 0)
-        return err_sys("RIPEMD   test failed!\n", ret);
+        TEST_FAIL("RIPEMD   test failed!\n", ret);
     else
         TEST_PASS("RIPEMD   test passed!\n");
 #endif
 
 #ifdef HAVE_BLAKE2
     if ( (ret = blake2b_test()) != 0)
-        return err_sys("BLAKE2b  test failed!\n", ret);
+        TEST_FAIL("BLAKE2b  test failed!\n", ret);
     else
         TEST_PASS("BLAKE2b  test passed!\n");
 #endif
 #ifdef HAVE_BLAKE2S
     if ( (ret = blake2s_test()) != 0)
-        return err_sys("BLAKE2s  test failed!\n", ret);
+        TEST_FAIL("BLAKE2s  test failed!\n", ret);
     else
         TEST_PASS("BLAKE2s  test passed!\n");
 #endif
@@ -1094,42 +1135,42 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
     #if !defined(NO_MD5) && !(defined(HAVE_FIPS) && defined(HAVE_FIPS_VERSION) \
                               && (HAVE_FIPS_VERSION >= 5))
         if ( (ret = hmac_md5_test()) != 0)
-            return err_sys("HMAC-MD5 test failed!\n", ret);
+            TEST_FAIL("HMAC-MD5 test failed!\n", ret);
         else
             TEST_PASS("HMAC-MD5 test passed!\n");
     #endif
 
     #ifndef NO_SHA
     if ( (ret = hmac_sha_test()) != 0)
-        return err_sys("HMAC-SHA test failed!\n", ret);
+        TEST_FAIL("HMAC-SHA test failed!\n", ret);
     else
         TEST_PASS("HMAC-SHA test passed!\n");
     #endif
 
     #ifdef WOLFSSL_SHA224
         if ( (ret = hmac_sha224_test()) != 0)
-            return err_sys("HMAC-SHA224 test failed!\n", ret);
+            TEST_FAIL("HMAC-SHA224 test failed!\n", ret);
         else
             TEST_PASS("HMAC-SHA224 test passed!\n");
     #endif
 
     #ifndef NO_SHA256
         if ( (ret = hmac_sha256_test()) != 0)
-            return err_sys("HMAC-SHA256 test failed!\n", ret);
+            TEST_FAIL("HMAC-SHA256 test failed!\n", ret);
         else
             TEST_PASS("HMAC-SHA256 test passed!\n");
     #endif
 
     #ifdef WOLFSSL_SHA384
         if ( (ret = hmac_sha384_test()) != 0)
-            return err_sys("HMAC-SHA384 test failed!\n", ret);
+            TEST_FAIL("HMAC-SHA384 test failed!\n", ret);
         else
             TEST_PASS("HMAC-SHA384 test passed!\n");
     #endif
 
     #ifdef WOLFSSL_SHA512
         if ( (ret = hmac_sha512_test()) != 0)
-            return err_sys("HMAC-SHA512 test failed!\n", ret);
+            TEST_FAIL("HMAC-SHA512 test failed!\n", ret);
         else
             TEST_PASS("HMAC-SHA512 test passed!\n");
 
@@ -1139,7 +1180,7 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
       !defined(WOLFSSL_NOSHA3_224) && !defined(WOLFSSL_NOSHA3_256) && \
       !defined(WOLFSSL_NOSHA3_384) && !defined(WOLFSSL_NOSHA3_512)
         if ( (ret = hmac_sha3_test()) != 0)
-            return err_sys("HMAC-SHA3   test failed!\n", ret);
+            TEST_FAIL("HMAC-SHA3   test failed!\n", ret);
         else
             TEST_PASS("HMAC-SHA3   test passed!\n");
     #endif
@@ -1147,7 +1188,7 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
     #if defined(HAVE_HKDF) && !defined(NO_HMAC)
         PRIVATE_KEY_UNLOCK();
         if ( (ret = hkdf_test()) != 0)
-            return err_sys("HMAC-KDF    test failed!\n", ret);
+            TEST_FAIL("HMAC-KDF    test failed!\n", ret);
         else
             TEST_PASS("HMAC-KDF    test passed!\n");
         PRIVATE_KEY_LOCK();
@@ -1157,7 +1198,7 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
 #ifdef WOLFSSL_WOLFSSH
     PRIVATE_KEY_UNLOCK();
     if ( (ret = sshkdf_test()) != 0)
-        return err_sys("SSH-KDF     test failed!\n", ret);
+        TEST_FAIL("SSH-KDF     test failed!\n", ret);
     else
         TEST_PASS("SSH-KDF     test passed!\n");
     PRIVATE_KEY_LOCK();
@@ -1166,7 +1207,7 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
 #ifdef WOLFSSL_TLS13
     PRIVATE_KEY_UNLOCK();
     if ( (ret = tls13_kdf_test()) != 0)
-        return err_sys("TLSv1.3 KDF test failed!\n", ret);
+        TEST_FAIL("TLSv1.3 KDF test failed!\n", ret);
     else
         TEST_PASS("TLSv1.3 KDF test passed!\n");
     PRIVATE_KEY_LOCK();
@@ -1174,14 +1215,14 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
 
 #if defined(HAVE_X963_KDF) && defined(HAVE_ECC)
     if ( (ret = x963kdf_test()) != 0)
-        return err_sys("X963-KDF    test failed!\n", ret);
+        TEST_FAIL("X963-KDF    test failed!\n", ret);
     else
         TEST_PASS("X963-KDF    test passed!\n");
 #endif
 
 #if defined(HAVE_HPKE) && defined(HAVE_ECC) && defined(HAVE_AESGCM)
     if ( (ret = hpke_test()) != 0)
-        return err_sys("HPKE     test failed!\n", ret);
+        TEST_FAIL("HPKE     test failed!\n", ret);
     else
         TEST_PASS("HPKE     test passed!\n");
 #endif
@@ -1189,97 +1230,97 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
 #if defined(HAVE_AESGCM) && defined(WOLFSSL_AES_128) && \
    !defined(WOLFSSL_AFALG_XILINX_AES) && !defined(WOLFSSL_XILINX_CRYPT)
     if ( (ret = gmac_test()) != 0)
-        return err_sys("GMAC     test failed!\n", ret);
+        TEST_FAIL("GMAC     test failed!\n", ret);
     else
         TEST_PASS("GMAC     test passed!\n");
 #endif
 
 #ifdef WC_RC2
     if ( (ret = rc2_test()) != 0)
-        return err_sys("RC2      test failed!\n", ret);
+        TEST_FAIL("RC2      test failed!\n", ret);
     else
         TEST_PASS("RC2      test passed!\n");
 #endif
 
 #ifndef NO_RC4
     if ( (ret = arc4_test()) != 0)
-        return err_sys("ARC4     test failed!\n", ret);
+        TEST_FAIL("ARC4     test failed!\n", ret);
     else
         TEST_PASS("ARC4     test passed!\n");
 #endif
 
 #ifdef HAVE_CHACHA
     if ( (ret = chacha_test()) != 0)
-        return err_sys("Chacha   test failed!\n", ret);
+        TEST_FAIL("Chacha   test failed!\n", ret);
     else
         TEST_PASS("Chacha   test passed!\n");
 #endif
 
 #ifdef HAVE_XCHACHA
     if ( (ret = XChaCha_test()) != 0)
-        return err_sys("XChacha  test failed!\n", ret);
+        TEST_FAIL("XChacha  test failed!\n", ret);
     else
         TEST_PASS("XChacha  test passed!\n");
 #endif
 
 #ifdef HAVE_POLY1305
     if ( (ret = poly1305_test()) != 0)
-        return err_sys("POLY1305 test failed!\n", ret);
+        TEST_FAIL("POLY1305 test failed!\n", ret);
     else
         TEST_PASS("POLY1305 test passed!\n");
 #endif
 
 #if defined(HAVE_CHACHA) && defined(HAVE_POLY1305)
     if ( (ret = chacha20_poly1305_aead_test()) != 0)
-        return err_sys("ChaCha20-Poly1305 AEAD test failed!\n", ret);
+        TEST_FAIL("ChaCha20-Poly1305 AEAD test failed!\n", ret);
     else
         TEST_PASS("ChaCha20-Poly1305 AEAD test passed!\n");
 #endif
 
 #if defined(HAVE_XCHACHA) && defined(HAVE_POLY1305)
     if ( (ret = XChaCha20Poly1305_test()) != 0)
-        return err_sys("XChaCha20-Poly1305 AEAD test failed!\n", ret);
+        TEST_FAIL("XChaCha20-Poly1305 AEAD test failed!\n", ret);
     else
         TEST_PASS("XChaCha20-Poly1305 AEAD test passed!\n");
 #endif
 
 #ifndef NO_DES3
     if ( (ret = des_test()) != 0)
-        return err_sys("DES      test failed!\n", ret);
+        TEST_FAIL("DES      test failed!\n", ret);
     else
         TEST_PASS("DES      test passed!\n");
 #endif
 
 #ifndef NO_DES3
     if ( (ret = des3_test()) != 0)
-        return err_sys("DES3     test failed!\n", ret);
+        TEST_FAIL("DES3     test failed!\n", ret);
     else
         TEST_PASS("DES3     test passed!\n");
 #endif
 
 #ifndef NO_AES
     if ( (ret = aes_test()) != 0)
-        return err_sys("AES      test failed!\n", ret);
+        TEST_FAIL("AES      test failed!\n", ret);
     else
         TEST_PASS("AES      test passed!\n");
 
 #ifdef WOLFSSL_AES_192
     if ( (ret = aes192_test()) != 0)
-        return err_sys("AES192   test failed!\n", ret);
+        TEST_FAIL("AES192   test failed!\n", ret);
     else
         TEST_PASS("AES192   test passed!\n");
 #endif
 
 #ifdef WOLFSSL_AES_256
     if ( (ret = aes256_test()) != 0)
-        return err_sys("AES256   test failed!\n", ret);
+        TEST_FAIL("AES256   test failed!\n", ret);
     else
         TEST_PASS("AES256   test passed!\n");
 #endif
 
 #ifdef WOLFSSL_AES_OFB
     if ( (ret = aesofb_test()) != 0)
-        return err_sys("AES-OFB  test failed!\n", ret);
+        TEST_FAIL("AES-OFB  test failed!\n", ret);
     else
         TEST_PASS("AESOFB   test passed!\n");
 #endif
@@ -1287,13 +1328,13 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
 #ifdef HAVE_AESGCM
     #if !defined(WOLFSSL_AFALG) && !defined(WOLFSSL_DEVCRYPTO)
     if ( (ret = aesgcm_test()) != 0)
-        return err_sys("AES-GCM  test failed!\n", ret);
+        TEST_FAIL("AES-GCM  test failed!\n", ret);
     #endif
     #if !defined(WOLFSSL_AFALG_XILINX_AES) && !defined(WOLFSSL_XILINX_CRYPT) && \
         !defined(WOLFSSL_KCAPI_AES) && !(defined(WOLF_CRYPTO_CB) && \
             (defined(HAVE_INTEL_QA_SYNC) || defined(HAVE_CAVIUM_OCTEON_SYNC)))
     if ((ret = aesgcm_default_test()) != 0) {
-        return err_sys("AES-GCM  test failed!\n", ret);
+        TEST_FAIL("AES-GCM  test failed!\n", ret);
     }
     #endif
     if (ret == 0) {
@@ -1303,19 +1344,19 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
 
 #if defined(HAVE_AESCCM) && defined(WOLFSSL_AES_128)
     if ( (ret = aesccm_test()) != 0)
-        return err_sys("AES-CCM  test failed!\n", ret);
+        TEST_FAIL("AES-CCM  test failed!\n", ret);
     else
         TEST_PASS("AES-CCM  test passed!\n");
 #endif
 #ifdef HAVE_AES_KEYWRAP
     if ( (ret = aeskeywrap_test()) != 0)
-        return err_sys("AES Key Wrap test failed!\n", ret);
+        TEST_FAIL("AES Key Wrap test failed!\n", ret);
     else
         TEST_PASS("AES Key Wrap test passed!\n");
 #endif
 #ifdef WOLFSSL_AES_SIV
     if ( (ret = aes_siv_test()) != 0)
-        return err_sys("AES-SIV  test failed!\n", ret);
+        TEST_FAIL("AES-SIV  test failed!\n", ret);
     else
         TEST_PASS("AES-SIV  test passed!\n");
 #endif
@@ -1323,7 +1364,7 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
 
 #ifdef HAVE_CAMELLIA
     if ( (ret = camellia_test()) != 0)
-        return err_sys("CAMELLIA test failed!\n", ret);
+        TEST_FAIL("CAMELLIA test failed!\n", ret);
     else
         TEST_PASS("CAMELLIA test passed!\n");
 #endif
@@ -1331,12 +1372,12 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
 #if !defined(NO_RSA)
     #ifdef WC_RSA_NO_PADDING
     if ( (ret = rsa_no_pad_test()) != 0)
-        return err_sys("RSA NOPAD test failed!\n", ret);
+        TEST_FAIL("RSA NOPAD test failed!\n", ret);
     else
         TEST_PASS("RSA NOPAD test passed!\n");
     #endif
     if ( (ret = rsa_test()) != 0)
-        return err_sys("RSA      test failed!\n", ret);
+        TEST_FAIL("RSA      test failed!\n", ret);
     else
         TEST_PASS("RSA      test passed!\n");
 #endif
@@ -1344,7 +1385,7 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
 #ifndef NO_DH
     PRIVATE_KEY_UNLOCK();
     if ( (ret = dh_test()) != 0)
-        return err_sys("DH       test failed!\n", ret);
+        TEST_FAIL("DH       test failed!\n", ret);
     else
         TEST_PASS("DH       test passed!\n");
     PRIVATE_KEY_LOCK();
@@ -1352,49 +1393,49 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
 
 #ifndef NO_DSA
     if ( (ret = dsa_test()) != 0)
-        return err_sys("DSA      test failed!\n", ret);
+        TEST_FAIL("DSA      test failed!\n", ret);
     else
         TEST_PASS("DSA      test passed!\n");
 #endif
 
 #ifdef WOLFCRYPT_HAVE_SRP
     if ( (ret = srp_test()) != 0)
-        return err_sys("SRP      test failed!\n", ret);
+        TEST_FAIL("SRP      test failed!\n", ret);
     else
         TEST_PASS("SRP      test passed!\n");
 #endif
 
 #ifndef NO_PWDBASED
     if ( (ret = pwdbased_test()) != 0)
-        return err_sys("PWDBASED test failed!\n", ret);
+        TEST_FAIL("PWDBASED test failed!\n", ret);
     else
         TEST_PASS("PWDBASED test passed!\n");
 #endif
 
 #if defined(OPENSSL_EXTRA) && !defined(WOLFCRYPT_ONLY)
     if ( (ret = openssl_test()) != 0)
-        return err_sys("OPENSSL  test failed!\n", ret);
+        TEST_FAIL("OPENSSL  test failed!\n", ret);
     else
         TEST_PASS("OPENSSL  test passed!\n");
 
     if ( (ret = openSSL_evpMD_test()) != 0)
-        return err_sys("OPENSSL (EVP MD) test failed!\n", ret);
+        TEST_FAIL("OPENSSL (EVP MD) test failed!\n", ret);
     else
         TEST_PASS("OPENSSL (EVP MD) passed!\n");
 
     if ( (ret = openssl_pkey0_test()) != 0)
-        return err_sys("OPENSSL (PKEY0) test failed!\n", ret);
+        TEST_FAIL("OPENSSL (PKEY0) test failed!\n", ret);
     else
         TEST_PASS("OPENSSL (PKEY0) passed!\n");
 
     if ( (ret = openssl_pkey1_test()) != 0)
-        return err_sys("OPENSSL (PKEY1) test failed!\n", ret);
+        TEST_FAIL("OPENSSL (PKEY1) test failed!\n", ret);
     else
         TEST_PASS("OPENSSL (PKEY1) passed!\n");
 
     #if !defined(WOLF_CRYPTO_CB_ONLY_RSA) && !defined(WOLF_CRYPTO_CB_ONLY_ECC)
     if ( (ret = openssl_evpSig_test()) != 0)
-        return err_sys("OPENSSL (EVP Sign/Verify) test failed!\n", ret);
+        TEST_FAIL("OPENSSL (EVP Sign/Verify) test failed!\n", ret);
     else
         TEST_PASS("OPENSSL (EVP Sign/Verify) passed!\n");
     #endif
@@ -1403,14 +1444,14 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
 #if defined(HAVE_ECC)
     PRIVATE_KEY_UNLOCK();
     if ( (ret = ecc_test()) != 0)
-        return err_sys("ECC      test failed!\n", ret);
+        TEST_FAIL("ECC      test failed!\n", ret);
     else
         TEST_PASS("ECC      test passed!\n");
     PRIVATE_KEY_LOCK();
     #if defined(HAVE_ECC_ENCRYPT) && defined(HAVE_AES_CBC) && \
         (defined(WOLFSSL_AES_128) || defined(WOLFSSL_AES_256))
         if ( (ret = ecc_encrypt_test()) != 0)
-            return err_sys("ECC Enc  test failed!\n", ret);
+            TEST_FAIL("ECC Enc  test failed!\n", ret);
         else
             TEST_PASS("ECC Enc  test passed!\n");
     #endif
@@ -1420,7 +1461,7 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
         !defined(WOLF_CRYPTO_CB_ONLY_ECC)
         /* skip for ATECC508/608A, cannot import private key buffers */
         if ( (ret = ecc_test_buffers()) != 0)
-            return err_sys("ECC buffer test failed!\n", ret);
+            TEST_FAIL("ECC buffer test failed!\n", ret);
         else
             TEST_PASS("ECC buffer test passed!\n");
     #endif
@@ -1429,7 +1470,7 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
 #if !defined(NO_ASN_TIME) && !defined(NO_RSA) && defined(WOLFSSL_TEST_CERT) && \
     !defined(NO_FILESYSTEM)
     if ( (ret = cert_test()) != 0)
-        return err_sys("CERT     test failed!\n", ret);
+        TEST_FAIL("CERT     test failed!\n", ret);
     else
         TEST_PASS("CERT     test passed!\n");
 #endif
@@ -1437,7 +1478,7 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
 #if defined(WOLFSSL_CERT_EXT) && defined(WOLFSSL_TEST_CERT) && \
    !defined(NO_FILESYSTEM) && !defined(NO_RSA) && defined(WOLFSSL_GEN_CERT)
     if ( (ret = certext_test()) != 0)
-        return err_sys("CERT EXT test failed!\n", ret);
+        TEST_FAIL("CERT EXT test failed!\n", ret);
     else
         TEST_PASS("CERT EXT test passed!\n");
 #endif
@@ -1445,76 +1486,76 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
 #if defined(WOLFSSL_CERT_GEN_CACHE) && defined(WOLFSSL_TEST_CERT) && \
     defined(WOLFSSL_CERT_EXT) && defined(WOLFSSL_CERT_GEN)
     if ( (ret = decodedCertCache_test()) != 0)
-        return err_sys("DECODED CERT CACHE test failed!\n", ret);
+        TEST_FAIL("DECODED CERT CACHE test failed!\n", ret);
     else
         TEST_PASS("DECODED CERT CACHE test passed!\n");
 #endif
 
 #ifdef HAVE_CURVE25519
     if ( (ret = curve25519_test()) != 0)
-        return err_sys("CURVE25519 test failed!\n", ret);
+        TEST_FAIL("CURVE25519 test failed!\n", ret);
     else
         TEST_PASS("CURVE25519 test passed!\n");
 #endif
 
 #ifdef HAVE_ED25519
     if ( (ret = ed25519_test()) != 0)
-        return err_sys("ED25519  test failed!\n", ret);
+        TEST_FAIL("ED25519  test failed!\n", ret);
     else
         TEST_PASS("ED25519  test passed!\n");
 #endif
 
 #ifdef HAVE_CURVE448
     if ( (ret = curve448_test()) != 0)
-        return err_sys("CURVE448 test failed!\n", ret);
+        TEST_FAIL("CURVE448 test failed!\n", ret);
     else
         TEST_PASS("CURVE448 test passed!\n");
 #endif
 
 #ifdef HAVE_ED448
     if ( (ret = ed448_test()) != 0)
-        return err_sys("ED448    test failed!\n", ret);
+        TEST_FAIL("ED448    test failed!\n", ret);
     else
         TEST_PASS("ED448    test passed!\n");
 #endif
 
 #ifdef WOLFSSL_HAVE_KYBER
     if ( (ret = kyber_test()) != 0)
-        return err_sys("KYBER    test failed!\n", ret);
+        TEST_FAIL("KYBER    test failed!\n", ret);
     else
         TEST_PASS("KYBER    test passed!\n");
 #endif
 
 #ifdef WOLFCRYPT_HAVE_ECCSI
     if ( (ret = eccsi_test()) != 0)
-        return err_sys("ECCSI    test failed!\n", ret);
+        TEST_FAIL("ECCSI    test failed!\n", ret);
     else
         TEST_PASS("ECCSI    test passed!\n");
 #endif
 #ifdef WOLFCRYPT_HAVE_SAKKE
     if ( (ret = sakke_test()) != 0)
-        return err_sys("SAKKE    test failed!\n", ret);
+        TEST_FAIL("SAKKE    test failed!\n", ret);
     else
         TEST_PASS("SAKKE    test passed!\n");
 #endif
 
 #if defined(WOLFSSL_CMAC) && !defined(NO_AES)
     if ( (ret = cmac_test()) != 0)
-        return err_sys("CMAC     test failed!\n", ret);
+        TEST_FAIL("CMAC     test failed!\n", ret);
     else
         TEST_PASS("CMAC     test passed!\n");
 #endif
 
 #if defined(WOLFSSL_SIPHASH)
     if ( (ret = siphash_test()) != 0)
-        return err_sys("SipHash  test failed!\n", ret);
+        TEST_FAIL("SipHash  test failed!\n", ret);
     else
         TEST_PASS("SipHash  test passed!\n");
 #endif
 
 #ifdef HAVE_LIBZ
     if ( (ret = compress_test()) != 0)
-        return err_sys("COMPRESS test failed!\n", ret);
+        TEST_FAIL("COMPRESS test failed!\n", ret);
     else
         TEST_PASS("COMPRESS test passed!\n");
 #endif
@@ -1522,29 +1563,29 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
 #ifdef HAVE_PKCS7
     #ifndef NO_PKCS7_ENCRYPTED_DATA
         if ( (ret = pkcs7encrypted_test()) != 0)
-            return err_sys("PKCS7encrypted  test failed!\n", ret);
+            TEST_FAIL("PKCS7encrypted  test failed!\n", ret);
         else
             TEST_PASS("PKCS7encrypted  test passed!\n");
     #endif
     #if defined(HAVE_LIBZ) && !defined(NO_PKCS7_COMPRESSED_DATA)
         if ( (ret = pkcs7compressed_test()) != 0)
-            return err_sys("PKCS7compressed test failed!\n", ret);
+            TEST_FAIL("PKCS7compressed test failed!\n", ret);
         else
             TEST_PASS("PKCS7compressed test passed!\n");
     #endif
     if ( (ret = pkcs7signed_test()) != 0)
-        return err_sys("PKCS7signed     test failed!\n", ret);
+        TEST_FAIL("PKCS7signed     test failed!\n", ret);
     else
         TEST_PASS("PKCS7signed     test passed!\n");
 
     if ( (ret = pkcs7enveloped_test()) != 0)
-        return err_sys("PKCS7enveloped  test failed!\n", ret);
+        TEST_FAIL("PKCS7enveloped  test failed!\n", ret);
     else
         TEST_PASS("PKCS7enveloped  test passed!\n");
 
     #if defined(HAVE_AESGCM) || defined(HAVE_AESCCM)
         if ( (ret = pkcs7authenveloped_test()) != 0)
-            return err_sys("PKCS7authenveloped  test failed!\n", ret);
+            TEST_FAIL("PKCS7authenveloped  test failed!\n", ret);
         else
             TEST_PASS("PKCS7authenveloped  test passed!\n");
     #endif
@@ -1553,14 +1594,14 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
 #if defined(WOLFSSL_PUBLIC_MP) && \
     (defined(WOLFSSL_SP_MATH_ALL) || defined(USE_FAST_MATH))
     if ( (ret = mp_test()) != 0)
-        return err_sys("mp       test failed!\n", ret);
+        TEST_FAIL("mp       test failed!\n", ret);
     else
         TEST_PASS("mp       test passed!\n");
 #endif
 
 #if defined(WOLFSSL_PUBLIC_MP) && defined(WOLFSSL_KEY_GEN)
     if ( (ret = prime_test()) != 0)
-        return err_sys("prime    test failed!\n", ret);
+        TEST_FAIL("prime    test failed!\n", ret);
     else
         TEST_PASS("prime    test passed!\n");
 #endif
@@ -1569,19 +1610,19 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
     (defined(WOLFSSL_TEST_CERT) || defined(OPENSSL_EXTRA) || \
      defined(OPENSSL_EXTRA_X509_SMALL))
     if ( (ret = berder_test()) != 0)
-        return err_sys("ber-der  test failed!\n", ret);
+        TEST_FAIL("ber-der  test failed!\n", ret);
     else
         TEST_PASS("ber-der  test passed!\n");
 #endif
 
     if ( (ret = logging_test()) != 0)
-        return err_sys("logging  test failed!\n", ret);
+        TEST_FAIL("logging  test failed!\n", ret);
     else
         TEST_PASS("logging  test passed!\n");
 
 #if !defined(NO_ASN) && !defined(NO_ASN_TIME)
     if ( (ret = time_test()) != 0)
-        return err_sys("time test failed!\n", ret);
+        TEST_FAIL("time test failed!\n", ret);
     else
         TEST_PASS("time test passed!\n");
 #endif
@@ -1591,20 +1632,20 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
 #else
     if ((ret = mutex_test()) != 0)
 #endif
-        return err_sys("mutex    test failed!\n", ret);
+        TEST_FAIL("mutex    test failed!\n", ret);
     else
         TEST_PASS("mutex    test passed!\n");
 
 #if defined(USE_WOLFSSL_MEMORY) && !defined(FREERTOS)
     if ( (ret = memcb_test()) != 0)
-        return err_sys("memcb    test failed!\n", ret);
+        TEST_FAIL("memcb    test failed!\n", ret);
     else
         TEST_PASS("memcb    test passed!\n");
 #endif
 
 #ifdef WOLFSSL_CAAM_BLOB
     if ( (ret = blob_test()) != 0)
-        return err_sys("blob     test failed!\n", ret);
+        TEST_FAIL("blob     test failed!\n", ret);
     else
         TEST_PASS("blob     test passed!\n");
 #endif
@@ -1613,14 +1654,14 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
     !(defined(HAVE_INTEL_QAT_SYNC) || defined(HAVE_CAVIUM_OCTEON_SYNC) || \
       defined(WOLFSSL_QNX_CAAM))
     if ( (ret = cryptocb_test()) != 0)
-        return err_sys("crypto callback test failed!\n", ret);
+        TEST_FAIL("crypto callback test failed!\n", ret);
     else
         TEST_PASS("crypto callback test passed!\n");
 #endif
 
 #ifdef WOLFSSL_CERT_PIV
     if ( (ret = certpiv_test()) != 0)
-        return err_sys("cert piv test failed!\n", ret);
+        TEST_FAIL("cert piv test failed!\n", ret);
     else
         TEST_PASS("cert piv test passed!\n");
 #endif
@@ -1641,6 +1682,11 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
     /* cleanup the thread if fixed point cache is enabled and have thread local */
 #if defined(HAVE_THREAD_LS) && defined(HAVE_ECC) && defined(FP_ECC)
     wc_ecc_fp_free();
+#endif
+
+#ifdef TEST_ALWAYS_RUN_TO_END
+    if (last_failed_test_ret != 0)
+        ret = last_failed_test_ret;
 #endif
 
     if (args)
@@ -1745,6 +1791,10 @@ options: [-s max_relative_stack_bytes] [-m max_relative_heap_memory_bytes]\n\
 #ifdef HAVE_VERSION_EXTENDED_INFO
         ShowExtendedSystemInfo();
 #endif
+
+    #ifdef HAVE_WC_INTROSPECTION
+        printf("Math: %s\n", wc_GetMathInfo());
+    #endif
 
 #ifdef WC_RNG_SEED_CB
     wc_SetSeed_Cb(wc_GenerateSeed);
@@ -4876,7 +4926,7 @@ WOLFSSL_TEST_SUBROUTINE int hash_test(void)
 
     for (i = 0; i < (int)(sizeof(typesHashBad)/sizeof(*typesHashBad)); i++) {
         ret = wc_Hash(typesHashBad[i], data, sizeof(data), out, sizeof(out));
-        if (ret != BAD_FUNC_ARG && ret != BUFFER_E)
+        if ((ret != BAD_FUNC_ARG) && (ret != BUFFER_E) && (ret != HASH_TYPE_E))
             return WC_TEST_RET_ENC_I(i);
     }
 
@@ -7461,6 +7511,9 @@ WOLFSSL_TEST_SUBROUTINE int des3_test(void)
     };
 
     int ret;
+#if defined(OPENSSL_EXTRA) && !defined(WOLFCRYPT_ONLY)
+    size_t i;
+#endif
 
 
     ret = wc_Des3Init(&enc, HEAP_HINT, devId);
@@ -7497,24 +7550,36 @@ WOLFSSL_TEST_SUBROUTINE int des3_test(void)
 
 #if defined(OPENSSL_EXTRA) && !defined(WOLFCRYPT_ONLY)
     /* test the same vectors with using compatibility layer */
-    {
+    for (i = 0; i < sizeof(vector); i += DES_BLOCK_SIZE){
         DES_key_schedule ks1;
         DES_key_schedule ks2;
         DES_key_schedule ks3;
         DES_cblock iv4;
+        byte tmp[sizeof(vector)];
 
         XMEMCPY(ks1, key3, sizeof(DES_key_schedule));
         XMEMCPY(ks2, key3 + 8, sizeof(DES_key_schedule));
         XMEMCPY(ks3, key3 + 16, sizeof(DES_key_schedule));
-        XMEMCPY(iv4, iv3, sizeof(DES_cblock));
 
         XMEMSET(plain, 0, sizeof(plain));
         XMEMSET(cipher, 0, sizeof(cipher));
 
-        DES_ede3_cbc_encrypt(vector, cipher, sizeof(vector), &ks1, &ks2, &ks3,
+        /* Test in-place encrypt/decrypt */
+        XMEMCPY(tmp, vector, sizeof(vector));
+
+        /* Use i as the splitter */
+        XMEMCPY(iv4, iv3, sizeof(DES_cblock));
+        DES_ede3_cbc_encrypt(tmp, tmp, (long)i, &ks1, &ks2, &ks3,
                 &iv4, DES_ENCRYPT);
-        DES_ede3_cbc_encrypt(cipher, plain, sizeof(cipher), &ks1, &ks2, &ks3,
+        DES_ede3_cbc_encrypt(tmp + i, tmp + i, (long)(sizeof(vector) - i),
+                &ks1, &ks2, &ks3, &iv4, DES_ENCRYPT);
+        XMEMCPY(cipher, tmp, sizeof(cipher));
+        XMEMCPY(iv4, iv3, sizeof(DES_cblock));
+        DES_ede3_cbc_encrypt(tmp, tmp, (long)i, &ks1, &ks2, &ks3,
                 &iv4, DES_DECRYPT);
+        DES_ede3_cbc_encrypt(tmp + i, tmp + i, (long)(sizeof(cipher) - i),
+                &ks1, &ks2, &ks3, &iv4, DES_DECRYPT);
+        XMEMCPY(plain, tmp, sizeof(plain));
 
         if (XMEMCMP(plain, vector, sizeof(plain)))
             return WC_TEST_RET_ENC_NC;
@@ -8563,6 +8628,7 @@ EVP_TEST_END:
         }
         #endif
     #endif
+#endif /* WOLFSSL_AES_256 */
 
   out:
 
@@ -8582,7 +8648,6 @@ EVP_TEST_END:
 #endif
 #endif
 
-#endif /* WOLFSSL_AES_256 */
         return ret;
     }
 
@@ -8778,6 +8843,7 @@ EVP_TEST_END:
             goto out;
         }
     #endif
+#endif /* WOLFSSL_AES_256 */
 
       out:
 
@@ -8796,8 +8862,6 @@ EVP_TEST_END:
         XFREE(dec, HEAP_HINT, DYNAMIC_TYPE_AES);
 #endif
 #endif
-
-#endif /* WOLFSSL_AES_256 */
 
         return ret;
     }
@@ -13246,7 +13310,6 @@ exit:
     return ret;
 }
 
-
 static int random_rng_test(void)
 {
     WC_RNG localRng;
@@ -13279,6 +13342,9 @@ static int random_rng_test(void)
         if (rng == NULL)
             return WC_TEST_RET_ENC_ERRNO;
 
+    #if defined(WOLFSSL_ASYNC_CRYPT) || defined(WOLF_CRYPTO_CB)
+        rng->devId = devId;
+    #endif
         ret = _rng_test(rng, WC_TEST_RET_ENC_NC);
 
         wc_rng_free(rng);
@@ -13638,10 +13704,10 @@ WOLFSSL_TEST_SUBROUTINE int memory_test(void)
 #if !defined(USE_FAST_MATH) && !defined(WOLFSSL_NO_MALLOC) && defined(XREALLOC)
     /* realloc test */
     {
-        byte *c = NULL;
         byte *b = (byte*)XMALLOC(MEM_TEST_SZ, HEAP_HINT,
                                  DYNAMIC_TYPE_TMP_BUFFER);
         #ifndef WOLFSSL_NO_REALLOC
+        byte *c = NULL;
         if (b) {
             c = (byte*)XREALLOC(b, MEM_TEST_SZ+sizeof(word32), HEAP_HINT,
                                 DYNAMIC_TYPE_TMP_BUFFER);
@@ -20012,7 +20078,7 @@ WOLFSSL_TEST_SUBROUTINE int openssl_test(void)
     EVP_MD_CTX_cleanup(&md_ctx);
     if (ret != WOLFSSL_SUCCESS)
         return WC_TEST_RET_ENC_NC;
-    if (XMEMCMP(hash, b.output, WC_SHA_DIGEST_SIZE) != 0)
+    if (XMEMCMP(hash, b.output, b.outLen) != 0)
         return WC_TEST_RET_ENC_NC;
 #endif /* NO_SHA */
 
@@ -20032,8 +20098,7 @@ WOLFSSL_TEST_SUBROUTINE int openssl_test(void)
             ret = EVP_DigestFinal(&md_ctx, hash, 0);
     }
     EVP_MD_CTX_cleanup(&md_ctx);
-    if (ret != WOLFSSL_SUCCESS ||
-            XMEMCMP(hash, e.output, WC_SHA224_DIGEST_SIZE) != 0) {
+    if (ret != WOLFSSL_SUCCESS || XMEMCMP(hash, e.output, e.outLen) != 0) {
         return WC_TEST_RET_ENC_NC;
     }
 #endif /* WOLFSSL_SHA224 */
@@ -20054,8 +20119,7 @@ WOLFSSL_TEST_SUBROUTINE int openssl_test(void)
             ret = EVP_DigestFinal(&md_ctx, hash, 0);
     }
     EVP_MD_CTX_cleanup(&md_ctx);
-    if (ret != WOLFSSL_SUCCESS ||
-            XMEMCMP(hash, d.output, WC_SHA256_DIGEST_SIZE) != 0) {
+    if (ret != WOLFSSL_SUCCESS || XMEMCMP(hash, d.output, d.outLen) != 0) {
         return WC_TEST_RET_ENC_NC;
     }
 #endif /* !NO_SHA256 */
@@ -20078,8 +20142,7 @@ WOLFSSL_TEST_SUBROUTINE int openssl_test(void)
             ret = EVP_DigestFinal(&md_ctx, hash, 0);
     }
     EVP_MD_CTX_cleanup(&md_ctx);
-    if (ret != WOLFSSL_SUCCESS ||
-            XMEMCMP(hash, e.output, WC_SHA384_DIGEST_SIZE) != 0) {
+    if (ret != WOLFSSL_SUCCESS || XMEMCMP(hash, e.output, e.outLen) != 0) {
         return WC_TEST_RET_ENC_NC;
     }
 #endif /* WOLFSSL_SHA384 */
@@ -20103,8 +20166,7 @@ WOLFSSL_TEST_SUBROUTINE int openssl_test(void)
             ret = EVP_DigestFinal(&md_ctx, hash, 0);
     }
     EVP_MD_CTX_cleanup(&md_ctx);
-    if (ret != WOLFSSL_SUCCESS ||
-            XMEMCMP(hash, f.output, WC_SHA512_DIGEST_SIZE) != 0) {
+    if (ret != WOLFSSL_SUCCESS || XMEMCMP(hash, f.output, f.outLen) != 0) {
         return WC_TEST_RET_ENC_NC;
     }
 
@@ -20126,8 +20188,7 @@ WOLFSSL_TEST_SUBROUTINE int openssl_test(void)
             ret = EVP_DigestFinal(&md_ctx, hash, 0);
     }
     EVP_MD_CTX_cleanup(&md_ctx);
-    if (ret != WOLFSSL_SUCCESS ||
-            XMEMCMP(hash, f.output, WC_SHA512_224_DIGEST_SIZE) != 0) {
+    if (ret != WOLFSSL_SUCCESS || XMEMCMP(hash, f.output, f.outLen) != 0) {
         return WC_TEST_RET_ENC_NC;
     }
 #endif /* !WOLFSSL_NOSHA512_224 && !FIPS ... */
@@ -20150,8 +20211,7 @@ WOLFSSL_TEST_SUBROUTINE int openssl_test(void)
             ret = EVP_DigestFinal(&md_ctx, hash, 0);
     }
     EVP_MD_CTX_cleanup(&md_ctx);
-    if (ret != WOLFSSL_SUCCESS ||
-            XMEMCMP(hash, f.output, WC_SHA512_256_DIGEST_SIZE) != 0) {
+    if (ret != WOLFSSL_SUCCESS || XMEMCMP(hash, f.output, f.outLen) != 0) {
         return WC_TEST_RET_ENC_NC;
     }
 #endif /* !WOLFSSL_NOSHA512_224 && !FIPS ... */
@@ -20174,8 +20234,7 @@ WOLFSSL_TEST_SUBROUTINE int openssl_test(void)
             ret = EVP_DigestFinal(&md_ctx, hash, 0);
     }
     EVP_MD_CTX_cleanup(&md_ctx);
-    if (ret != WOLFSSL_SUCCESS ||
-            XMEMCMP(hash, e.output, WC_SHA3_224_DIGEST_SIZE) != 0) {
+    if (ret != WOLFSSL_SUCCESS || XMEMCMP(hash, e.output, e.outLen) != 0) {
         return WC_TEST_RET_ENC_NC;
     }
 #endif /* WOLFSSL_NOSHA3_224 */
@@ -20197,8 +20256,7 @@ WOLFSSL_TEST_SUBROUTINE int openssl_test(void)
             ret = EVP_DigestFinal(&md_ctx, hash, 0);
     }
     EVP_MD_CTX_cleanup(&md_ctx);
-    if (ret != WOLFSSL_SUCCESS ||
-            XMEMCMP(hash, d.output, WC_SHA3_256_DIGEST_SIZE) != 0) {
+    if (ret != WOLFSSL_SUCCESS || XMEMCMP(hash, d.output, d.outLen) != 0) {
         return WC_TEST_RET_ENC_NC;
     }
 #endif /* WOLFSSL_NOSHA3_256 */
@@ -20220,8 +20278,7 @@ WOLFSSL_TEST_SUBROUTINE int openssl_test(void)
             ret = EVP_DigestFinal(&md_ctx, hash, 0);
     }
     EVP_MD_CTX_cleanup(&md_ctx);
-    if (ret != WOLFSSL_SUCCESS ||
-            XMEMCMP(hash, e.output, WC_SHA3_384_DIGEST_SIZE) != 0) {
+    if (ret != WOLFSSL_SUCCESS || XMEMCMP(hash, e.output, e.outLen) != 0) {
         return WC_TEST_RET_ENC_NC;
     }
 
@@ -20245,7 +20302,7 @@ WOLFSSL_TEST_SUBROUTINE int openssl_test(void)
     }
     EVP_MD_CTX_cleanup(&md_ctx);
     if (ret != WOLFSSL_SUCCESS ||
-            XMEMCMP(hash, f.output, WC_SHA3_512_DIGEST_SIZE) != 0) {
+            XMEMCMP(hash, f.output, f.outLen) != 0) {
         return WC_TEST_RET_ENC_NC;
     }
 #endif /* WOLFSSL_NOSHA3_512 */
@@ -20270,7 +20327,7 @@ WOLFSSL_TEST_SUBROUTINE int openssl_test(void)
 #else
     if (HMAC(EVP_md5(), "JefeJefeJefeJefe", 16, (byte*)c.input, (int)c.inLen,
             hash, 0) == NULL ||
-        XMEMCMP(hash, c.output, WC_MD5_DIGEST_SIZE) != 0)
+        XMEMCMP(hash, c.output, c.outLen) != 0)
 #endif
     {
         return WC_TEST_RET_ENC_NC;
@@ -21269,8 +21326,11 @@ WOLFSSL_TEST_SUBROUTINE int openssl_pkey0_test(void)
     }
     prvBytes = (int)XFREAD(prvTmp, 1, (int)FOURK_BUFF, keyFile);
     XFCLOSE(keyFile);
-    if (prvBytes == 0)
+    if (prvBytes == 0) {
+        XFREE(prvTmp, HEAP_HINT, DYNAMIC_TYPE_TMP_BUFFER);
+        XFREE(pubTmp, HEAP_HINT, DYNAMIC_TYPE_TMP_BUFFER);
         return WC_TEST_RET_ENC_ERRNO;
+    }
     keypubFile = XFOPEN(cliKeypub, "rb");
     if (!keypubFile) {
         XFREE(prvTmp, HEAP_HINT, DYNAMIC_TYPE_TMP_BUFFER);
@@ -21281,8 +21341,11 @@ WOLFSSL_TEST_SUBROUTINE int openssl_pkey0_test(void)
     }
     pubBytes = (int)XFREAD(pubTmp, 1, (int)FOURK_BUFF, keypubFile);
     XFCLOSE(keypubFile);
-    if (pubBytes == 0)
+    if (pubBytes == 0) {
+        XFREE(prvTmp, HEAP_HINT, DYNAMIC_TYPE_TMP_BUFFER);
+        XFREE(pubTmp, HEAP_HINT, DYNAMIC_TYPE_TMP_BUFFER);
         return WC_TEST_RET_ENC_ERRNO;
+    }
 #endif /* USE_CERT_BUFFERS */
 
         prvRsa = wolfSSL_RSA_new();
@@ -21688,8 +21751,11 @@ WOLFSSL_TEST_SUBROUTINE int openssl_evpSig_test(void)
     }
     prvBytes = (int)XFREAD(prvTmp, 1, (int)FOURK_BUFF, keyFile);
     XFCLOSE(keyFile);
-    if (prvBytes == 0)
+    if (prvBytes == 0) {
+        XFREE(prvTmp, HEAP_HINT, DYNAMIC_TYPE_TMP_BUFFER);
+        XFREE(pubTmp, HEAP_HINT, DYNAMIC_TYPE_TMP_BUFFER);
         return WC_TEST_RET_ENC_ERRNO;
+    }
     keypubFile = XFOPEN(cliKeypub, "rb");
     if (!keypubFile) {
         XFREE(pubTmp, HEAP_HINT, DYNAMIC_TYPE_TMP_BUFFER);
@@ -21700,8 +21766,11 @@ WOLFSSL_TEST_SUBROUTINE int openssl_evpSig_test(void)
     }
     pubBytes = (int)XFREAD(pubTmp, 1, (int)FOURK_BUFF, keypubFile);
     XFCLOSE(keypubFile);
-    if (pubBytes == 0)
+    if (pubBytes == 0) {
+        XFREE(prvTmp, HEAP_HINT, DYNAMIC_TYPE_TMP_BUFFER);
+        XFREE(pubTmp, HEAP_HINT, DYNAMIC_TYPE_TMP_BUFFER);
         return WC_TEST_RET_ENC_ERRNO;
+    }
     #endif /* USE_CERT_BUFFERS */
 
     prvRsa = wolfSSL_RSA_new();
@@ -24768,7 +24837,9 @@ static int ecc_test_curve_size(WC_RNG* rng, int keySize, int testVerifyCount,
     WC_DECLARE_VAR(exportBuf, byte, ECC_KEY_EXPORT_BUF_SIZE, HEAP_HINT);
 #endif
     word32  x = 0;
-#if defined(HAVE_ECC_SIGN) && !defined(WOLFSSL_KCAPI_ECC)
+#if !defined(ECC_TIMING_RESISTANT) || (defined(ECC_TIMING_RESISTANT) && \
+    !defined(WC_NO_RNG) && !defined(WOLFSSL_KCAPI_ECC)) && \
+    defined(HAVE_ECC_SIGN)
     WC_DECLARE_VAR(sig, byte, ECC_SIG_SIZE, HEAP_HINT);
     WC_DECLARE_VAR(digest, byte, ECC_DIGEST_SIZE, HEAP_HINT);
     int     i;
@@ -24802,7 +24873,9 @@ static int ecc_test_curve_size(WC_RNG* rng, int keySize, int testVerifyCount,
         ERROR_OUT(WC_TEST_RET_ENC_ERRNO, done);
 #endif
 
-#if defined(HAVE_ECC_SIGN) && !defined(WOLFSSL_KCAPI_ECC)
+#if !defined(ECC_TIMING_RESISTANT) || (defined(ECC_TIMING_RESISTANT) && \
+    !defined(WC_NO_RNG) && !defined(WOLFSSL_KCAPI_ECC)) && \
+    defined(HAVE_ECC_SIGN)
     if (sig == NULL || digest == NULL)
         ERROR_OUT(WC_TEST_RET_ENC_ERRNO, done);
 #endif
@@ -25716,7 +25789,8 @@ static int ecc_mulmod_test(ecc_key* key1)
     if (ret != 0)
         goto done;
 
-    ret = wc_ecc_mulmod(&key1->k, &key2->pubkey, &key3->pubkey, &key2->k, &key3->k,
+    ret = wc_ecc_mulmod(wc_ecc_key_get_priv(key1), &key2->pubkey, &key3->pubkey,
+                        wc_ecc_key_get_priv(key2), wc_ecc_key_get_priv(key3),
                         1);
     if (ret != 0) {
         ret = WC_TEST_RET_ENC_EC(ret);
@@ -43786,6 +43860,9 @@ WOLFSSL_TEST_SUBROUTINE int mutex_test(void)
 {
 #ifdef WOLFSSL_PTHREADS
     wolfSSL_Mutex m;
+#endif
+#if defined(WOLFSSL_PTHREADS) || (!defined(WOLFSSL_NO_MALLOC) && \
+    !defined(WOLFSSL_USER_MUTEX) && defined(WOLFSSL_STATIC_MEMORY))
     int ret;
 #endif
 #if !defined(WOLFSSL_NO_MALLOC) && !defined(WOLFSSL_USER_MUTEX)
@@ -44052,7 +44129,7 @@ WOLFSSL_TEST_SUBROUTINE int blob_test(void)
 
     return ret;
 }
-#endif /* WOLFSSL_IMX6_CAAM_BLOB */
+#endif /* WOLFSSL_CAAM_BLOB */
 
 #ifdef WOLF_CRYPTO_CB
 
@@ -44259,11 +44336,13 @@ static int ecc_onlycb_test(myCryptoDevCtx *ctx)
     #ifdef OPENSSL_EXTRA
     EVP_PKEY* privKey = NULL;
     EVP_PKEY* pubKey = NULL;
+    #ifdef USE_CERT_BUFFERS_256
     ecc_key* pkey;
+    const unsigned char* cp;
+    #endif
     EVP_MD_CTX mdCtx;
     const char testData[] = "Hi There";
     size_t checkSz = -1;
-    const unsigned char* cp;
     const unsigned char* p;
     const unsigned char check_v[256] = {
         0x30,0x45,0x02,0x20,0x1b,0x5c,0x2a,0xf0,0x18,0x09,
@@ -44555,7 +44634,12 @@ static int myCryptoDevCb(int devIdArg, wc_CryptoInfo* info, void* ctx)
 #endif
 
     if (info->algo_type == WC_ALGO_TYPE_RNG) {
-    #ifndef WC_NO_RNG
+    #if defined(WOLF_CRYPTO_CB) && !defined(HAVE_HASHDRBG) && \
+        !defined(WC_NO_RNG) && !defined(CUSTOM_RAND_GENERATE_BLOCK)
+        /* if RNG only supports crypto callback, just use seed */
+        ret = wc_GenerateSeed(&info->rng.rng->seed,
+            info->rng.out, info->rng.sz);
+    #elif !defined(WC_NO_RNG)
         /* set devId to invalid, so software is used */
         info->rng.rng->devId = INVALID_DEVID;
 
@@ -45142,9 +45226,27 @@ static int myCryptoDevCb(int devIdArg, wc_CryptoInfo* info, void* ctx)
     return ret;
 }
 
+
+static int myCryptoCbFind(int currentId, int algoType)
+{
+    /* can have algo specific overrides here
+       switch (algoType) {
+
+        }
+    */
+    (void)algoType;
+
+    if (currentId == INVALID_DEVID) {
+        return 1; /* override invalid devid found with 1 */
+    }
+    return currentId;
+}
+
+
 WOLFSSL_TEST_SUBROUTINE int cryptocb_test(void)
 {
     int ret = 0;
+    int origDevId = devId;
     myCryptoDevCtx myCtx;
 
     /* example data for callback */
@@ -45153,7 +45255,7 @@ WOLFSSL_TEST_SUBROUTINE int cryptocb_test(void)
     /* set devId to something other than INVALID_DEVID */
     devId = 1;
     ret = wc_CryptoCb_RegisterDevice(devId, myCryptoDevCb, &myCtx);
-
+    wc_CryptoCb_SetDeviceFindCb(myCryptoCbFind);
 #ifndef WC_NO_RNG
     if (ret == 0)
         ret = random_test();
@@ -45245,8 +45347,8 @@ WOLFSSL_TEST_SUBROUTINE int cryptocb_test(void)
         ret = cmac_test();
 #endif
 
-    /* reset devId */
-    devId = INVALID_DEVID;
+    /* restore devId */
+    devId = origDevId;
 
     return ret;
 }

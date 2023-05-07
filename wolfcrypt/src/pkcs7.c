@@ -1929,7 +1929,7 @@ static int wc_PKCS7_BuildSignedAttributes(PKCS7* pkcs7, ESD* esd,
         return BAD_FUNC_ARG;
     }
 
-    if (pkcs7->skipDefaultSignedAttribs == 0) {
+    if (pkcs7->defaultSignedAttribs != WOLFSSL_NO_ATTRIBUTES) {
         hashSz = wc_HashGetDigestSize(esd->hashType);
         if (hashSz < 0)
             return hashSz;
@@ -1946,23 +1946,34 @@ static int wc_PKCS7_BuildSignedAttributes(PKCS7* pkcs7, ESD* esd,
 
         cannedAttribsCount = sizeof(cannedAttribs)/sizeof(PKCS7Attrib);
 
-        cannedAttribs[idx].oid     = contentTypeOid;
-        cannedAttribs[idx].oidSz   = contentTypeOidSz;
-        cannedAttribs[idx].value   = contentType;
-        cannedAttribs[idx].valueSz = contentTypeSz;
-        idx++;
+        if ((pkcs7->defaultSignedAttribs & WOLFSSL_CONTENT_TYPE_ATTRIBUTE) ||
+            pkcs7->defaultSignedAttribs == 0) {
+            cannedAttribs[idx].oid     = contentTypeOid;
+            cannedAttribs[idx].oidSz   = contentTypeOidSz;
+            cannedAttribs[idx].value   = contentType;
+            cannedAttribs[idx].valueSz = contentTypeSz;
+            idx++;
+        }
+
     #ifndef NO_ASN_TIME
-        cannedAttribs[idx].oid     = signingTimeOid;
-        cannedAttribs[idx].oidSz   = signingTimeOidSz;
-        cannedAttribs[idx].value   = signingTime;
-        cannedAttribs[idx].valueSz = timeSz;
-        idx++;
+        if ((pkcs7->defaultSignedAttribs & WOLFSSL_SIGNING_TIME_ATTRIBUTE) ||
+            pkcs7->defaultSignedAttribs == 0) {
+            cannedAttribs[idx].oid     = signingTimeOid;
+            cannedAttribs[idx].oidSz   = signingTimeOidSz;
+            cannedAttribs[idx].value   = signingTime;
+            cannedAttribs[idx].valueSz = timeSz;
+            idx++;
+        }
     #endif
-        cannedAttribs[idx].oid     = messageDigestOid;
-        cannedAttribs[idx].oidSz   = messageDigestOidSz;
-        cannedAttribs[idx].value   = esd->contentDigest;
-        cannedAttribs[idx].valueSz = hashSz + 2;  /* ASN.1 heading */
-        idx++;
+
+        if ((pkcs7->defaultSignedAttribs & WOLFSSL_MESSAGE_DIGEST_ATTRIBUTE) ||
+            pkcs7->defaultSignedAttribs == 0) {
+            cannedAttribs[idx].oid     = messageDigestOid;
+            cannedAttribs[idx].oidSz   = messageDigestOidSz;
+            cannedAttribs[idx].value   = esd->contentDigest;
+            cannedAttribs[idx].valueSz = hashSz + 2;  /* ASN.1 heading */
+            idx++;
+        }
 
         esd->signedAttribsCount += cannedAttribsCount;
         esd->signedAttribsSz += EncodeAttributes(&esd->signedAttribs[atrIdx],
@@ -1976,15 +1987,9 @@ static int wc_PKCS7_BuildSignedAttributes(PKCS7* pkcs7, ESD* esd,
     /* add custom signed attributes if set */
     if (pkcs7->signedAttribsSz > 0 && pkcs7->signedAttribs != NULL) {
         esd->signedAttribsCount += pkcs7->signedAttribsSz;
-    #ifdef NO_ASN_TIME
         esd->signedAttribsSz += EncodeAttributes(&esd->signedAttribs[atrIdx],
                                   esd->signedAttribsCount,
                                   pkcs7->signedAttribs, pkcs7->signedAttribsSz);
-    #else
-        esd->signedAttribsSz += EncodeAttributes(&esd->signedAttribs[atrIdx],
-                                  esd->signedAttribsCount,
-                                  pkcs7->signedAttribs, pkcs7->signedAttribsSz);
-    #endif
     }
 
 #ifdef NO_ASN_TIME
@@ -2839,13 +2844,48 @@ int wc_PKCS7_SetDetached(PKCS7* pkcs7, word16 flag)
  * Returns 0 on success, negative upon error. */
 int wc_PKCS7_NoDefaultSignedAttribs(PKCS7* pkcs7)
 {
-    if (pkcs7 == NULL)
+    return wc_PKCS7_SetDefaultSignedAttribs(pkcs7, WOLFSSL_NO_ATTRIBUTES);
+}
+
+
+/* By default, SignedData bundles have the following signed attributes attached:
+ *     contentType (1.2.840.113549.1.9.3)
+ *     signingTime (1.2.840.113549.1.9.5)
+ *     messageDigest (1.2.840.113549.1.9.4)
+ *
+ * Calling this API before wc_PKCS7_EncodeSignedData() allows control over which
+ * default attributes are added.
+ *
+ * pkcs7 - pointer to initialized PKCS7 structure
+ *
+ * Returns 0 on success, negative upon error. */
+int  wc_PKCS7_SetDefaultSignedAttribs(PKCS7* pkcs7, word16 flag)
+{
+    if (pkcs7 == NULL) {
         return BAD_FUNC_ARG;
+    }
 
-    pkcs7->skipDefaultSignedAttribs = 1;
+    if (flag & WOLFSSL_NO_ATTRIBUTES) {
+        if (flag ^ WOLFSSL_NO_ATTRIBUTES) {
+            WOLFSSL_MSG("Error, can not have additional flags with no "
+                "attributes flag set");
+            return BAD_FUNC_ARG;
+        }
+        pkcs7->defaultSignedAttribs = 0;
+    }
 
+    /* check for unknown flags */
+    if (flag & ~(WOLFSSL_CONTENT_TYPE_ATTRIBUTE |
+                WOLFSSL_SIGNING_TIME_ATTRIBUTE |
+                WOLFSSL_MESSAGE_DIGEST_ATTRIBUTE | WOLFSSL_NO_ATTRIBUTES)) {
+        WOLFSSL_MSG("Unknown attribute flags found");
+        return BAD_FUNC_ARG;
+    }
+
+    pkcs7->defaultSignedAttribs |= flag;
     return 0;
 }
+
 
 /* return codes: >0: Size of signed PKCS7 output buffer, negative: error */
 int wc_PKCS7_EncodeSignedData(PKCS7* pkcs7, byte* output, word32 outputSz)
@@ -3820,7 +3860,7 @@ static int wc_PKCS7_VerifyContentMessageDigest(PKCS7* pkcs7,
 
     /* compare generated to hash in messageDigest attribute */
     if ((innerAttribSz != digestSz) ||
-        (XMEMCMP(attrib->value + idx, digestBuf, (word32)digestSz) != 0)) {
+        (XMEMCMP(attrib->value + idx, digestBuf, (size_t)digestSz) != 0)) {
         WOLFSSL_MSG("Content digest does not match messageDigest attrib value");
 #ifdef WOLFSSL_SMALL_STACK
         XFREE(digest, pkcs7->heap, DYNAMIC_TYPE_TMP_BUFFER);
@@ -9733,6 +9773,10 @@ static int wc_PKCS7_DecryptKekri(PKCS7* pkcs7, byte* in, word32 inSz,
                 *idx += (dateLen + 1);
             }
 
+            if (*idx > pkiMsgSz) {
+                return ASN_PARSE_E;
+            }
+
             /* may have OPTIONAL OtherKeyAttribute */
             localIdx = *idx;
             if ((*idx < kekIdSz) && GetASNTag(pkiMsg, &localIdx, &tag,
@@ -9743,6 +9787,10 @@ static int wc_PKCS7_DecryptKekri(PKCS7* pkcs7, byte* in, word32 inSz,
 
                 /* skip it */
                 *idx += length;
+            }
+
+            if (*idx > pkiMsgSz) {
+                return ASN_PARSE_E;
             }
 
             /* get KeyEncryptionAlgorithmIdentifier */
@@ -11009,7 +11057,7 @@ int wc_PKCS7_EncodeAuthEnvelopedData(PKCS7* pkcs7, byte* output,
 {
 #if defined(HAVE_AESGCM) || defined(HAVE_AESCCM)
     int ret, idx = 0;
-    int totalSz, encryptedOutSz;
+    int totalSz, encryptedAllocSz, encryptedOutSz;
 
     int contentInfoSeqSz, outerContentTypeSz, outerContentSz;
     byte contentInfoSeq[MAX_SEQ_SZ];
@@ -11022,6 +11070,7 @@ int wc_PKCS7_EncodeAuthEnvelopedData(PKCS7* pkcs7, byte* output,
 
     WC_RNG rng;
     int blockSz, blockKeySz;
+    byte* plain;
     byte* encryptedContent;
 
     Pkcs7EncodedRecip* tmpRecip = NULL;
@@ -11334,11 +11383,38 @@ int wc_PKCS7_EncodeAuthEnvelopedData(PKCS7* pkcs7, byte* output,
                                          unauthAttribSet);
     }
 
-    /* allocate encrypted content buffer */
+    /* AES-GCM/CCM does NOT require padding for plaintext content or
+     * AAD inputs RFC 5084 section 3.1 and 3.2, but we must alloc
+     * full blocks to ensure crypto only gets full blocks */
     encryptedOutSz = pkcs7->contentSz;
-    encryptedContent = (byte*)XMALLOC(encryptedOutSz, pkcs7->heap,
+    encryptedAllocSz = (encryptedOutSz % blockSz) ?
+                           encryptedOutSz + blockSz -
+                           (encryptedOutSz % blockSz) :
+                           encryptedOutSz;
+
+    /* Copy content to plain buffer (zero-padded) to encrypt in full,
+     * contiguous blocks */
+    plain = (byte*)XMALLOC(encryptedAllocSz, pkcs7->heap, DYNAMIC_TYPE_PKCS7);
+    if (plain == NULL) {
+        wc_PKCS7_FreeEncodedRecipientSet(pkcs7);
+        if (aadBuffer)
+            XFREE(aadBuffer, pkcs7->heap, DYNAMIC_TYPE_TMP_BUFFER);
+        if (flatUnauthAttribs)
+            XFREE(flatUnauthAttribs, pkcs7->heap, DYNAMIC_TYPE_PKCS7);
+        if (flatAuthAttribs)
+            XFREE(flatAuthAttribs, pkcs7->heap, DYNAMIC_TYPE_PKCS7);
+        return MEMORY_E;
+    }
+
+    XMEMCPY(plain, pkcs7->content, pkcs7->contentSz);
+    if ((encryptedAllocSz - encryptedOutSz) > 0) {
+        XMEMSET(plain + encryptedOutSz, 0, encryptedAllocSz - encryptedOutSz);
+    }
+
+    encryptedContent = (byte*)XMALLOC(encryptedAllocSz, pkcs7->heap,
                                       DYNAMIC_TYPE_PKCS7);
     if (encryptedContent == NULL) {
+        XFREE(plain, pkcs7->heap, DYNAMIC_TYPE_PKCS7);
         wc_PKCS7_FreeEncodedRecipientSet(pkcs7);
         if (aadBuffer)
             XFREE(aadBuffer, pkcs7->heap, DYNAMIC_TYPE_TMP_BUFFER);
@@ -11352,8 +11428,11 @@ int wc_PKCS7_EncodeAuthEnvelopedData(PKCS7* pkcs7, byte* output,
     /* encrypt content */
     ret = wc_PKCS7_EncryptContent(pkcs7->encryptOID, pkcs7->cek,
             pkcs7->cekSz, nonce, nonceSz, aadBuffer, aadBufferSz, authTag,
-            sizeof(authTag), pkcs7->content, encryptedOutSz, encryptedContent,
+            sizeof(authTag), plain, encryptedOutSz, encryptedContent,
             pkcs7->devId, pkcs7->heap);
+
+    XFREE(plain, pkcs7->heap, DYNAMIC_TYPE_PKCS7);
+    plain = NULL;
 
     if (aadBuffer) {
         XFREE(aadBuffer, pkcs7->heap, DYNAMIC_TYPE_TMP_BUFFER);
@@ -11561,6 +11640,7 @@ WOLFSSL_API int wc_PKCS7_DecodeAuthEnvelopedData(PKCS7* pkcs7, byte* in,
     byte  decryptedKey[MAX_ENCRYPTED_KEY_SZ];
 #endif
     int encryptedContentSz = 0;
+    int encryptedAllocSz = 0;
     byte* encryptedContent = NULL;
     int explicitOctet = 0;
 
@@ -11686,14 +11766,18 @@ WOLFSSL_API int wc_PKCS7_DecodeAuthEnvelopedData(PKCS7* pkcs7, byte* in,
                 ret = ASN_PARSE_E;
             }
 
-            blockKeySz = wc_PKCS7_GetOIDKeySize(encOID);
-            if (ret == 0 && blockKeySz < 0) {
-                ret = blockKeySz;
+            if (ret == 0) {
+                blockKeySz = wc_PKCS7_GetOIDKeySize(encOID);
+                if (blockKeySz < 0) {
+                    ret = blockKeySz;
+                }
             }
 
-            expBlockSz = wc_PKCS7_GetOIDBlockSize(encOID);
-            if (ret == 0 && expBlockSz < 0) {
-                ret = expBlockSz;
+            if (ret == 0) {
+                expBlockSz = wc_PKCS7_GetOIDBlockSize(encOID);
+                if (expBlockSz < 0) {
+                    ret = expBlockSz;
+                }
             }
 
             /* get nonce, stored in OPTIONAL parameter of AlgoID
@@ -11836,11 +11920,34 @@ WOLFSSL_API int wc_PKCS7_DecodeAuthEnvelopedData(PKCS7* pkcs7, byte* in,
             pkiMsgSz = (pkcs7->stream->length > 0)? pkcs7->stream->length: inSz;
 
             encryptedContentSz = pkcs7->stream->expected;
+        #else
+            pkiMsgSz = inSz;
         #endif
 
+            if (expBlockSz == 0) {
+        #ifndef NO_PKCS7_STREAM
+                wc_PKCS7_StreamGetVar(pkcs7, &encOID, NULL, NULL);
+        #endif
+                if (encOID == 0)
+                    expBlockSz = 1;
+                else {
+                    expBlockSz = wc_PKCS7_GetOIDBlockSize(encOID);
+                    if (expBlockSz < 0) {
+                        ret = expBlockSz;
+                        break;
+                    } else if (expBlockSz == 0)
+                        expBlockSz = 1;
+                }
+            }
+
             /* AES-GCM/CCM does NOT require padding for plaintext content or
-             * AAD inputs RFC 5084 section 3.1 and 3.2 */
-            encryptedContent = (byte*)XMALLOC(encryptedContentSz, pkcs7->heap,
+             * AAD inputs RFC 5084 section 3.1 and 3.2, but we must alloc
+             * full blocks to ensure crypto only gets full blocks */
+            encryptedAllocSz = (encryptedContentSz % expBlockSz) ?
+                                   encryptedContentSz + expBlockSz -
+                                   (encryptedContentSz % expBlockSz) :
+                                   encryptedContentSz;
+            encryptedContent = (byte*)XMALLOC(encryptedAllocSz, pkcs7->heap,
                                                             DYNAMIC_TYPE_PKCS7);
             if (ret == 0 && encryptedContent == NULL) {
                 ret = MEMORY_E;
