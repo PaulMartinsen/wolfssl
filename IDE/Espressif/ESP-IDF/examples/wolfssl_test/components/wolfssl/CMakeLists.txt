@@ -46,12 +46,12 @@ endif()
 
 set(INCLUDE_PATH ${WOLFSSL_ROOT})
 
-set(COMPONENT_SRCDIRS "${WOLFSSL_ROOT}/src/"
-                        "${WOLFSSL_ROOT}/wolfcrypt/src/"
-                        "${WOLFSSL_ROOT}/wolfcrypt/src/port/Espressif/"
-                        "${WOLFSSL_ROOT}/wolfcrypt/src/port/atmel/"
-                        "${WOLFSSL_ROOT}/wolfcrypt/benchmark/"
-                        "${WOLFSSL_ROOT}/wolfcrypt/test/"
+set(COMPONENT_SRCDIRS \"${WOLFSSL_ROOT}/src/\"
+                        \"${WOLFSSL_ROOT}/wolfcrypt/src/\"
+                        \"${WOLFSSL_ROOT}/wolfcrypt/src/port/Espressif/\"
+                        \"${WOLFSSL_ROOT}/wolfcrypt/src/port/atmel/\"
+                        \"${WOLFSSL_ROOT}/wolfcrypt/benchmark/\"
+                        \"${WOLFSSL_ROOT}/wolfcrypt/test/\"
                         )
 
 set(COMPONENT_REQUIRES lwip)
@@ -167,17 +167,17 @@ string(REPLACE "\\" "/" RTOS_IDF_PATH5 "$ENV{IDF_PATH}/components/freertos/FreeR
 if(IS_DIRECTORY ${IDF_PATH}/components/freertos/FreeRTOS-Kernel/)
     set(COMPONENT_ADD_INCLUDEDIRS
         "."
-       "${WOLFSSL_ROOT}/include"
-       "${RTOS_IDF_PATH5}"
-       "${WOLFSSL_ROOT}"
+       \"include\"
+       \"${RTOS_IDF_PATH5}\"
+       \"${WOLFSSL_ROOT}\"
        )
 else()
 
    set(COMPONENT_ADD_INCLUDEDIRS
        "."
-       "${WOLFSSL_ROOT}/include"
-       "${RTOS_IDF_PATH}"
-       "${WOLFSSL_ROOT}"
+       \"include\"
+       \"${RTOS_IDF_PATH}\"
+       \"${WOLFSSL_ROOT}\"
       )
 endif()
 
@@ -186,21 +186,30 @@ if(IS_DIRECTORY ${IDF_PATH}/components/cryptoauthlib)
 endif()
 
 set(COMPONENT_SRCEXCLUDE
-    "${WOLFSSL_ROOT}/src/bio.c"
-    "${WOLFSSL_ROOT}/src/conf.c"
-    "${WOLFSSL_ROOT}/src/misc.c"
-    "${WOLFSSL_ROOT}/src/pk.c"
-    "${WOLFSSL_ROOT}/src/ssl_asn1.c" # included by ssl.c
-    "${WOLFSSL_ROOT}/src/ssl_bn.c" # included by ssl.c
-    "${WOLFSSL_ROOT}/src/ssl_misc.c" # included by ssl.c
-    "${WOLFSSL_ROOT}/src/x509.c"
-    "${WOLFSSL_ROOT}/src/x509_str.c"
-    "${WOLFSSL_ROOT}/wolfcrypt/src/evp.c"
-    "${WOLFSSL_ROOT}/wolfcrypt/src/misc.c"
-    "${EXCLUDE_ASM}"
+    \"${WOLFSSL_ROOT}/src/bio.c"
+    \"${WOLFSSL_ROOT}/src/conf.c"
+    \"${WOLFSSL_ROOT}/src/misc.c"
+    \"${WOLFSSL_ROOT}/src/pk.c"
+    \"${WOLFSSL_ROOT}/src/ssl_asn1.c\" # included by ssl.c
+    \"${WOLFSSL_ROOT}/src/ssl_bn.c\" # included by ssl.c
+    \"${WOLFSSL_ROOT}/src/ssl_misc.c\" # included by ssl.c
+    \"${WOLFSSL_ROOT}/src/x509.c\"
+    \"${WOLFSSL_ROOT}/src/x509_str.c\"
+    \"${WOLFSSL_ROOT}/wolfcrypt/src/evp.c\"
+    \"${WOLFSSL_ROOT}/wolfcrypt/src/misc.c\"
+    \"${EXCLUDE_ASM}\"
     )
 
-register_component()
+separate_arguments(COMPONENT_SRCDIRS NATIVE_COMMAND "${COMPONENT_SRCDIRS}")
+separate_arguments(COMPONENT_ADD_INCLUDEDIRS NATIVE_COMMAND "${COMPONENT_ADD_INCLUDEDIRS}")
+spaces2list(COMPONENT_REQUIRES)
+separate_arguments(COMPONENT_SRCEXCLUDE NATIVE_COMMAND "${COMPONENT_SRCEXCLUDE}")
+idf_component_register(
+                        SRC_DIRS "${COMPONENT_SRCDIRS}"
+                        INCLUDE_DIRS "${COMPONENT_ADD_INCLUDEDIRS}"
+                        REQUIRES "${COMPONENT_REQUIRES}"
+                        EXCLUDE_SRCS "${COMPONENT_SRCEXCLUDE}"
+                      )
 
 # some optional diagnostics
 if (0)
