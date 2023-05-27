@@ -5435,6 +5435,9 @@ static THREAD_RETURN WOLFSSL_THREAD test_server_nofail(void* args)
         input[idx] = '\0';
         fprintf(stderr, "Client message: %s\n", input);
     }
+    else if (idx < 0) {
+        goto done;
+    }
 
     if (wolfSSL_write(ssl, msg, sizeof(msg)) != sizeof(msg)) {
         /*err_sys("SSL_write failed");*/
@@ -5684,8 +5687,6 @@ done:
 }
 #endif /* defined(OPENSSL_EXTRA) && !defined(NO_SESSION_CACHE) && !defined(WOLFSSL_TLS13) */
 
-typedef int (*cbType)(WOLFSSL_CTX *ctx, WOLFSSL *ssl);
-
 static int test_client_nofail(void* args, cbType cb)
 {
 #if !defined(NO_WOLFSSL_CLIENT)
@@ -5928,8 +5929,8 @@ done:
     return 0;
 }
 
-void test_wolfSSL_client_server_nofail(callback_functions* client_cb,
-                                       callback_functions* server_cb)
+void test_wolfSSL_client_server_nofail_ex(callback_functions* client_cb,
+    callback_functions* server_cb, cbType client_on_handshake)
 {
     func_args client_args;
     func_args server_args;
@@ -5958,7 +5959,7 @@ void test_wolfSSL_client_server_nofail(callback_functions* client_cb,
 
     start_thread(test_server_nofail, &server_args, &serverThread);
     wait_tcp_ready(&server_args);
-    test_client_nofail(&client_args, NULL);
+    test_client_nofail(&client_args, client_on_handshake);
     join_thread(serverThread);
 
     client_cb->return_code = client_args.return_code;
@@ -5970,6 +5971,13 @@ void test_wolfSSL_client_server_nofail(callback_functions* client_cb,
     fdOpenSession(Task_self());
 #endif
 }
+
+void test_wolfSSL_client_server_nofail(callback_functions* client_cb,
+    callback_functions* server_cb)
+{
+    test_wolfSSL_client_server_nofail_ex(client_cb, server_cb, NULL);
+}
+
 
 #if defined(OPENSSL_EXTRA) && !defined(NO_SESSION_CACHE) && \
    !defined(WOLFSSL_TLS13) && !defined(NO_WOLFSSL_CLIENT)
@@ -28961,7 +28969,7 @@ static int test_wc_PKCS7_EncodeSignedData_ex(void)
         outputHead, outputHeadSz, outputFoot, 0), WC_PKCS7_WANT_READ_E);
 #else
     AssertIntEQ(wc_PKCS7_VerifySignedData_ex(pkcs7, hashBuf, hashSz,
-        outputHead, outputHeadSz, outputFoot, 0), ASN_PARSE_E);
+        outputHead, outputHeadSz, outputFoot, 0), BUFFER_E);
 #endif
 
     wc_PKCS7_Free(pkcs7);
@@ -33143,6 +33151,7 @@ static int test_wolfSSL_ASN1_TIME_to_tm(void)
       defined(OPENSSL_ALL)) && !defined(NO_ASN_TIME)
     ASN1_TIME asnTime;
     struct tm tm;
+    time_t testTime = 1683926567; /* Fri May 12 09:22:47 PM UTC 2023 */
 
     XMEMSET(&asnTime, 0, sizeof(ASN1_TIME));
     AssertIntEQ(ASN1_TIME_set_string(&asnTime, "000222211515Z"), 1);
@@ -33187,6 +33196,22 @@ static int test_wolfSSL_ASN1_TIME_to_tm(void)
     AssertIntEQ(ASN1_TIME_to_tm(&asnTime, &tm), 0);
     AssertIntEQ(ASN1_TIME_set_string(&asnTime, "20000222211515U"), 1);
     AssertIntEQ(ASN1_TIME_to_tm(&asnTime, &tm), 0);
+
+#ifdef XMKTIME
+    AssertNotNull(ASN1_TIME_adj(&asnTime, testTime, 0, 0));
+    AssertIntEQ(ASN1_TIME_to_tm(&asnTime, &tm), 1);
+    AssertIntEQ(tm.tm_sec, 47);
+    AssertIntEQ(tm.tm_min, 22);
+    AssertIntEQ(tm.tm_hour, 21);
+    AssertIntEQ(tm.tm_mday, 12);
+    AssertIntEQ(tm.tm_mon, 4);
+    AssertIntEQ(tm.tm_year, 123);
+    AssertIntEQ(tm.tm_wday, 5);
+    AssertIntEQ(tm.tm_yday, 131);
+    /* Confirm that when used with a tm struct from ASN1_TIME_adj, all other
+       fields are zeroed out as expected. */
+    AssertIntEQ(tm.tm_isdst, 0);
+#endif
 
     res = TEST_RES_CHECK(1);
 #endif
@@ -43880,7 +43905,13 @@ static int test_GENERAL_NAME_set0_othername(void) {
 #if defined(OPENSSL_EXTRA) && !defined(NO_CERTS) && \
     defined(WOLFSSL_CERT_GEN) && defined(WOLFSSL_CERT_REQ) && \
     defined(WOLFSSL_CUSTOM_OID) && defined(WOLFSSL_ALT_NAMES) && \
-    defined(WOLFSSL_CERT_EXT) && !defined(NO_FILESYSTEM)
+    defined(WOLFSSL_CERT_EXT) && !defined(NO_FILESYSTEM)  && \
+    defined(WOLFSSL_FPKI)
+
+    /* ./configure --enable-opensslall --enable-certgen --enable-certreq
+     *  --enable-certext --enable-debug 'CPPFLAGS=-DWOLFSSL_CUSTOM_OID
+     *  -DWOLFSSL_ALT_NAMES  -DWOLFSSL_FPKI' */
+
     const char * cert_fname = "./certs/server-cert.der";
     const char * key_fname = "./certs/server-key.der";
     X509* x509 = NULL;
@@ -43896,6 +43927,18 @@ static int test_GENERAL_NAME_set0_othername(void) {
     int derSz = 0;
     EVP_PKEY* priv = NULL;
     FILE* f = NULL;
+    /* The length of this buffer is 37 */
+    const unsigned char expected_asn1[] = {
+        /* OID specifier and length */
+        0x06, 0x0A,
+        /* 1.3.6.1.4.1.311.20.2.3 */
+        0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x14, 0x02, 0x03,
+        /* TODO */
+        0xA0, 0x17, 0x0C, 0x15,
+        /* othername@wolfssl.com */
+        0x6F, 0x74, 0x68, 0x65, 0x72, 0x6E, 0x61, 0x6D, 0x65, 0x40, 0x77, 0x6F,
+        0x6C, 0x66, 0x73, 0x73, 0x6C, 0x2E, 0x63, 0x6F, 0x6D
+    };
 
     AssertNotNull(f = fopen(cert_fname, "rb"));
     AssertNotNull(x509 = d2i_X509_fp(f, NULL));
@@ -43919,6 +43962,25 @@ static int test_GENERAL_NAME_set0_othername(void) {
                                         (const unsigned char**)&pt, derSz));
     AssertIntGT(X509_sign(x509, priv, EVP_sha256()), 0);
     sk_GENERAL_NAME_pop_free(gns, GENERAL_NAME_free);
+    AssertNotNull(gns = X509_get_ext_d2i(x509, NID_subject_alt_name, NULL,
+                                         NULL));
+
+    AssertIntEQ(sk_GENERAL_NAME_num(gns), 3);
+
+    AssertNotNull(gn = sk_GENERAL_NAME_value(gns, 2));
+    AssertIntEQ(gn->type, 0);
+
+    /* It is odd that we are using ASN_RFC822_TYPE. It is because when we are
+     * parsing der, the string is not fully parsed. It is still raw der whereas
+     * when we encode we set the oid (for example, upn) and value. As we are
+     * overloading the meaning of the type, here we manually do the right thing.
+     */
+    AssertIntEQ(ASN1_STRING_length(gn->d.rfc822Name), 37);
+    AssertIntEQ(XMEMCMP(ASN1_STRING_data(gn->d.rfc822Name), expected_asn1, 37),
+                0);
+    gn->type = ASN_RFC822_TYPE;
+    sk_GENERAL_NAME_pop_free(gns, GENERAL_NAME_free);
+
     ASN1_OBJECT_free(upn_oid);
     X509_EXTENSION_free(ext);
     X509_free(x509);
@@ -43934,7 +43996,13 @@ static int test_othername_and_SID_ext(void) {
 #if defined(OPENSSL_EXTRA) && !defined(NO_CERTS) && \
     defined(WOLFSSL_CERT_GEN) && defined(WOLFSSL_CERT_REQ) && \
     defined(WOLFSSL_CUSTOM_OID) && defined(WOLFSSL_ALT_NAMES) && \
-    defined(WOLFSSL_CERT_EXT) && !defined(NO_FILESYSTEM)
+    defined(WOLFSSL_CERT_EXT) && !defined(NO_FILESYSTEM) && \
+    defined(WOLFSSL_FPKI) && defined(WOLFSSL_ASN_TEMPLATE)
+
+    /* ./configure --enable-opensslall --enable-certgen --enable-certreq
+     *  --enable-certext --enable-debug 'CPPFLAGS=-DWOLFSSL_CUSTOM_OID
+     *  -DWOLFSSL_ALT_NAMES  -DWOLFSSL_FPKI' */
+
 
     const char* csr_fname = "./certs/csr.signed.der";
     const char* key_fname = "./certs/server-key.der";
@@ -43945,11 +44013,13 @@ static int test_othername_and_SID_ext(void) {
     STACK_OF(X509_EXTENSION) *exts = NULL;
 
     X509_EXTENSION * san_ext = NULL;
+    X509_EXTENSION * ext = NULL;
     GENERAL_NAME* gn = NULL;
     GENERAL_NAMES* gns = NULL;
     ASN1_OBJECT* upn_oid = NULL;
     ASN1_UTF8STRING *utf8str = NULL;
     ASN1_TYPE *value = NULL;
+    ASN1_STRING *extval = NULL;
 
     /* SID extension. SID data format explained here:
      * https://blog.qdsecurity.se/2022/05/27/manually-injecting-a-sid-in-a-certificate/
@@ -43959,6 +44029,13 @@ static int test_othername_and_SID_ext(void) {
     48, 4,  46,  83, 45, 49, 45, 53, 45, 50, 49, 45,  50, 56, 52, 51, 57,
     48, 55, 52,  49, 56, 45, 51, 57, 50, 54, 50, 55,  55, 52, 50, 49, 45,
     51, 56, 49,  53, 57, 57, 51, 57, 55, 50, 45, 52,  54, 48, 49};
+
+    uint8_t expectedAltName[] = {
+    0x30, 0x27, 0xA0, 0x25, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82,
+    0x37, 0x14, 0x02, 0x03, 0xA0, 0x17, 0x0C, 0x15, 0x6F, 0x74, 0x68, 0x65,
+    0x72, 0x6E, 0x61, 0x6D, 0x65, 0x40, 0x77, 0x6F, 0x6C, 0x66, 0x73, 0x73,
+    0x6C, 0x2E, 0x63, 0x6F, 0x6D};
+
     X509_EXTENSION *sid_ext = NULL;
     ASN1_OBJECT* sid_oid = NULL;
     ASN1_OCTET_STRING *sid_data = NULL;
@@ -43966,6 +44043,7 @@ static int test_othername_and_SID_ext(void) {
     EVP_PKEY* priv = NULL;
     FILE* f = NULL;
     byte* pt = NULL;
+    BIO* bio = NULL;
 
     AssertNotNull(f = fopen(csr_fname, "rb"));
     AssertNotNull(x509 = d2i_X509_REQ_fp(f, NULL));
@@ -44007,7 +44085,54 @@ static int test_othername_and_SID_ext(void) {
     ASN1_OBJECT_free(sid_oid);
     ASN1_OCTET_STRING_free(sid_data);
     X509_REQ_free(x509);
+    x509 = NULL;
     EVP_PKEY_free(priv);
+
+    /* At this point everything used to generate what is in der is cleaned up.
+     * We now read back from der to confirm the extensions were inserted
+     * correctly. */
+    bio = wolfSSL_BIO_new(wolfSSL_BIO_s_mem());
+    AssertNotNull(bio);
+
+    AssertIntEQ(BIO_write(bio, der, derSz), derSz); /* d2i consumes BIO */
+    d2i_X509_REQ_bio(bio, &x509);
+    AssertNotNull(x509);
+    BIO_free(bio);
+    AssertNotNull(exts = (STACK_OF(X509_EXTENSION)*) X509_REQ_get_extensions(
+                            x509));
+    AssertIntEQ(sk_X509_EXTENSION_num(exts), 2);
+
+    /* Check the SID extension. */
+    AssertNotNull(ext = sk_X509_EXTENSION_value(exts, 0));
+    AssertNotNull(extval = X509_EXTENSION_get_data(ext));
+    AssertIntEQ(extval->length, sizeof(SidExtension));
+    AssertIntEQ(XMEMCMP(SidExtension, extval->data, sizeof(SidExtension)), 0);
+
+    /* Check the AltNames extension. */
+    AssertNotNull(ext = sk_X509_EXTENSION_value(exts, 1));
+    AssertNotNull(extval = X509_EXTENSION_get_data(ext));
+    AssertIntEQ(extval->length, sizeof(expectedAltName));
+    AssertIntEQ(XMEMCMP(expectedAltName, extval->data, sizeof(expectedAltName)),
+                0);
+
+    /* Cleanup */
+    AssertNotNull(gns = X509_get_ext_d2i(x509, NID_subject_alt_name, NULL,
+                                         NULL));
+    AssertIntEQ(sk_GENERAL_NAME_num(gns), 1);
+    AssertNotNull(gn = sk_GENERAL_NAME_value(gns, 0));
+    AssertIntEQ(gn->type, 0);
+
+    /* It is odd that we are using ASN_RFC822_TYPE. It is because when we are
+     * parsing der, the string is not fully parsed. It is still raw der whereas
+     * when we encode we set the oid (for example, upn) and value. As we are
+     * overloading the meaning of the type, here we manually do the right thing.
+     */
+    gn->type = ASN_RFC822_TYPE;
+    sk_GENERAL_NAME_pop_free(gns, GENERAL_NAME_free);
+
+    ext->ext_sk->data.gn->type = ASN_RFC822_TYPE;
+    sk_X509_EXTENSION_pop_free(exts, X509_EXTENSION_free);
+    X509_REQ_free(x509);
     res = TEST_RES_CHECK(1);
 #endif
     return res;
@@ -53777,11 +53902,11 @@ static int test_tls13_apis(void)
             ":P256_KYBER_LEVEL1"
 #endif
 #endif
+#endif /* !defined(NO_ECC_SECP) */
 #ifdef HAVE_PQC
             ":KYBER_LEVEL1"
 #endif
             "";
-#endif /* !defined(NO_ECC_SECP) */
 #endif /* defined(OPENSSL_EXTRA) && defined(HAVE_ECC) */
 
     (void)ret;
@@ -62839,7 +62964,7 @@ static int test_wolfSSL_CRYPTO_get_ex_new_index(void)
     return res;
 }
 
-#if defined(HAVE_EX_DATA) && \
+#if defined(HAVE_EX_DATA) && defined(HAVE_EXT_CACHE) && \
     (defined(OPENSSL_ALL) || (defined(OPENSSL_EXTRA) && \
         (defined(HAVE_STUNNEL) || defined(WOLFSSL_NGINX) || \
         defined(HAVE_LIGHTY) || defined(WOLFSSL_HAPROXY) || \
@@ -63143,9 +63268,9 @@ static void obj_name_t(const OBJ_NAME* nm, void* arg)
     /* print to stderr */
     AssertNotNull(arg);
 
-    bio = BIO_new(BIO_s_file());
+    BIO *bio = BIO_new(BIO_s_file());
     BIO_set_fp(bio, arg, BIO_NOCLOSE);
-    BIO_printf(bio, "%s\n", mn);
+    BIO_printf(bio, "%s\n", nm);
     BIO_free(bio);
 #endif
 }
@@ -65661,7 +65786,321 @@ static int test_override_alt_cert_chain(void)
 }
 #endif
 
+#if defined(HAVE_IO_TESTS_DEPENDENCIES) && defined(WOLFSSL_DTLS13)
 
+
+static int test_dtls13_bad_epoch_ch(void)
+{
+    WOLFSSL_CTX *ctx_c = NULL, *ctx_s = NULL;
+    WOLFSSL *ssl_c = NULL, *ssl_s = NULL;
+    struct test_memio_ctx test_ctx;
+    const int EPOCH_OFF = 3;
+    int ret, err;
+
+    XMEMSET(&test_ctx, 0, sizeof(test_ctx));
+    ret = test_memio_setup(&test_ctx, &ctx_c, &ctx_s, &ssl_c, &ssl_s,
+        wolfDTLSv1_3_client_method, wolfDTLSv1_3_server_method);
+    if (ret != 0)
+        return TEST_FAIL;
+
+    /* disable hrr cookie so we can later check msgsReceived.got_client_hello
+     *  with just one message */
+    ret = wolfSSL_disable_hrr_cookie(ssl_s);
+    if (ret != WOLFSSL_SUCCESS)
+        return TEST_FAIL;
+
+    ret = wolfSSL_connect(ssl_c);
+    err = wolfSSL_get_error(ssl_c, ret);
+    if (ret == WOLFSSL_SUCCESS || err != WOLFSSL_ERROR_WANT_READ)
+        return TEST_FAIL;
+
+    if (test_ctx.s_len < EPOCH_OFF + 2)
+        return TEST_FAIL;
+
+    /* first CH should use epoch 0x0 */
+    if (test_ctx.s_buff[EPOCH_OFF] != 0x0 ||
+        test_ctx.s_buff[EPOCH_OFF + 1] != 0x0)
+        return TEST_FAIL;
+
+    /* change epoch to 2 */
+    test_ctx.s_buff[EPOCH_OFF + 1] = 0x2;
+
+    ret = wolfSSL_accept(ssl_s);
+    err = wolfSSL_get_error(ssl_s, ret);
+    if (ret == WOLFSSL_SUCCESS || err != WOLFSSL_ERROR_WANT_READ)
+        return TEST_FAIL;
+
+    if (ssl_s->msgsReceived.got_client_hello == 1)
+        return TEST_FAIL;
+
+    /* resend the CH */
+    ret = wolfSSL_dtls_got_timeout(ssl_c);
+    if (ret != WOLFSSL_SUCCESS)
+        return TEST_FAIL;
+
+    ret = test_memio_do_handshake(ssl_c, ssl_s, 10, NULL);
+    if (ret != 0)
+        return TEST_FAIL;
+
+    wolfSSL_free(ssl_c);
+    wolfSSL_CTX_free(ctx_c);
+    wolfSSL_free(ssl_s);
+    wolfSSL_CTX_free(ctx_s);
+
+    return TEST_SUCCESS;
+}
+#else
+static int test_dtls13_bad_epoch_ch(void)
+{
+    return TEST_SKIPPED;
+}
+#endif
+
+
+#if defined(HAVE_NULL_CIPHER) && defined(HAVE_IO_TESTS_DEPENDENCIES) && \
+    defined(WOLFSSL_DTLS13)
+static byte* test_find_string(const char *string,
+    byte *buf, int buf_size)
+{
+    int string_size, i;
+
+    string_size = XSTRLEN(string);
+    for (i = 0; i < buf_size - string_size - 1; i++) {
+        if (XSTRCMP((char*)&buf[i], string) == 0)
+            return &buf[i];
+    }
+    return NULL;
+}
+
+static int test_wolfSSL_dtls13_null_cipher(void)
+{
+    WOLFSSL_CTX *ctx_c = NULL, *ctx_s = NULL;
+    WOLFSSL *ssl_c = NULL, *ssl_s = NULL;
+    struct test_memio_ctx test_ctx;
+    const char *test_str = "test";
+    int ret, test_str_size;
+    byte buf[255], *ptr;
+
+    XMEMSET(&test_ctx, 0, sizeof(test_ctx));
+    test_ctx.c_ciphers = test_ctx.s_ciphers = "TLS13-SHA256-SHA256";
+    ret = test_memio_setup(&test_ctx, &ctx_c, &ctx_s, &ssl_c, &ssl_s,
+        wolfDTLSv1_3_client_method, wolfDTLSv1_3_server_method);
+    if (ret != 0)
+        return TEST_FAIL;
+    ret = test_memio_do_handshake(ssl_c, ssl_s, 10, NULL);
+    if (ret != 0)
+        return TEST_FAIL;
+    test_str_size = XSTRLEN("test") + 1;
+    ret = wolfSSL_write(ssl_c, test_str, test_str_size);
+    if (ret != test_str_size)
+        return TEST_FAIL;
+    ret = wolfSSL_read(ssl_s, buf, sizeof(buf));
+    if (ret != test_str_size || XSTRCMP((char*)buf, test_str) != 0)
+        return TEST_FAIL;
+
+    ret = wolfSSL_write(ssl_c, test_str, test_str_size);
+    if (ret != test_str_size)
+        return TEST_FAIL;
+
+    /* check that the packet was sent cleartext */
+    ptr = test_find_string(test_str, test_ctx.s_buff, test_ctx.s_len);
+    if (ptr == NULL)
+        return TEST_FAIL;
+    /* modify the message */
+    *ptr = 'H';
+    /* bad messages should be ignored in DTLS */
+    ret = wolfSSL_read(ssl_s, buf, sizeof(buf));
+    if (ret != -1 || ssl_s->error != WANT_READ)
+        return TEST_FAIL;
+
+    wolfSSL_free(ssl_c);
+    wolfSSL_free(ssl_s);
+    wolfSSL_CTX_free(ctx_c);
+    wolfSSL_CTX_free(ctx_s);
+    return TEST_SUCCESS;
+}
+#else
+static int test_wolfSSL_dtls13_null_cipher(void)
+{
+    return TEST_SKIPPED;
+}
+#endif
+#if defined(WOLFSSL_DTLS) && !defined(WOLFSSL_NO_TLS12) &&          \
+    !defined(NO_WOLFSSL_CLIENT) && !defined(NO_WOLFSSL_SERVER) &&   \
+    !defined(SINGLE_THREADED)
+
+static int test_dtls_msg_get_connected_port(int fd, word16 *port)
+{
+    SOCKADDR_S peer;
+    XSOCKLENT len;
+    int ret;
+
+    XMEMSET((byte*)&peer, 0, sizeof(peer));
+    len = sizeof(peer);
+    ret = getpeername(fd,  (SOCKADDR*)&peer, &len);
+    if (ret != 0 || len > sizeof(peer))
+        return -1;
+    switch (peer.ss_family) {
+#ifdef WOLFSSL_IPV6
+    case WOLFSSL_IP6: {
+        *port = ntohs(((SOCKADDR_IN6*)&peer)->sin6_port);
+        break;
+    }
+#endif /* WOLFSSL_IPV6 */
+    case WOLFSSL_IP4:
+        *port = ntohs(((SOCKADDR_IN*)&peer)->sin_port);
+        break;
+    default:
+        return -1;
+    }
+    return 0;
+}
+
+static int test_dtls_msg_from_other_peer_cb(WOLFSSL_CTX *ctx, WOLFSSL *ssl)
+{
+    char buf[1] = {'t'};
+    SOCKADDR_IN_T addr;
+    int sock_fd;
+    word16 port;
+    int err;
+
+    (void)ssl;
+    (void)ctx;
+
+    err = test_dtls_msg_get_connected_port(wolfSSL_get_fd(ssl), &port);
+    if (err != 0)
+        return -1;
+
+    sock_fd = socket(AF_INET_V, SOCK_DGRAM, 0);
+    if (sock_fd == -1)
+        return -1;
+    build_addr(&addr, wolfSSLIP, port, 1, 0);
+
+    /* send a packet to the server. Being another socket, the kernel will ensure
+     * the source port will be different. */
+    err = (int)sendto(sock_fd, buf, sizeof(buf), 0, (SOCKADDR*)&addr,
+        sizeof(addr));
+
+    close(sock_fd);
+    if (err == -1)
+        return -1;
+
+    return 0;
+}
+
+/* setup a SSL session but just after the handshake send a packet to the server
+ * with a source address different than the one of the connected client. The I/O
+ * callback EmbedRecvFrom should just ignore the packet. Sending of the packet
+ * is done in test_dtls_msg_from_other_peer_cb */
+static int test_dtls_msg_from_other_peer(void)
+{
+    callback_functions client_cbs;
+    callback_functions server_cbs;
+
+    XMEMSET((byte*)&client_cbs, 0, sizeof(client_cbs));
+    XMEMSET((byte*)&server_cbs, 0, sizeof(server_cbs));
+
+    client_cbs.method = wolfDTLSv1_2_client_method;
+    server_cbs.method = wolfDTLSv1_2_server_method;
+    client_cbs.doUdp = 1;
+    server_cbs.doUdp = 1;
+
+    test_wolfSSL_client_server_nofail_ex(&client_cbs, &server_cbs,
+        test_dtls_msg_from_other_peer_cb);
+
+    if (client_cbs.return_code != WOLFSSL_SUCCESS ||
+        server_cbs.return_code != WOLFSSL_SUCCESS)
+        return TEST_FAIL;
+
+    return TEST_SUCCESS;
+}
+#else
+static int test_dtls_msg_from_other_peer(void)
+{
+    return TEST_SKIPPED;
+}
+#endif /* defined(WOLFSSL_DTLS) && !defined(WOLFSSL_NO_TLS12) &&          \
+        *  !defined(NO_WOLFSSL_CLIENT) && !defined(NO_WOLFSSL_SERVER) &&  \
+        *  !defined(SINGLE_THREADED) */
+#if defined(WOLFSSL_DTLS) && !defined(WOLFSSL_IPV6) &&               \
+    !defined(NO_WOLFSSL_CLIENT) && !defined(NO_WOLFSSL_SERVER) &&   \
+    defined(HAVE_IO_TESTS_DEPENDENCIES)
+static int test_dtls_ipv6_check(void)
+{
+    WOLFSSL_CTX *ctx_c = NULL, *ctx_s = NULL;
+    WOLFSSL *ssl_c = NULL, *ssl_s = NULL;
+    SOCKADDR_IN fake_addr6;
+    int sockfd;
+    int ret;
+
+    ctx_c = wolfSSL_CTX_new(wolfDTLSv1_2_client_method());
+    if (ctx_c == NULL)
+        return TEST_FAIL;
+    ssl_c  = wolfSSL_new(ctx_c);
+    if (ssl_c == NULL)
+        return TEST_FAIL;
+    ctx_s = wolfSSL_CTX_new(wolfDTLSv1_2_server_method());
+    if (ctx_s == NULL)
+        return TEST_FAIL;
+    ret = wolfSSL_CTX_use_PrivateKey_file(ctx_s, svrKeyFile,
+                                          WOLFSSL_FILETYPE_PEM);
+    if (ret != WOLFSSL_SUCCESS)
+        return- -1;
+    ret = wolfSSL_CTX_use_certificate_file(ctx_s, svrCertFile,
+                                           WOLFSSL_FILETYPE_PEM);
+    if (ret != WOLFSSL_SUCCESS)
+        return -1;
+    ssl_s  = wolfSSL_new(ctx_s);
+    if (ssl_s == NULL)
+        return TEST_FAIL;
+    XMEMSET((byte*)&fake_addr6, 0, sizeof(fake_addr6));
+    /* mimic a sockaddr_in6 struct, this way we can't test without
+     *  WOLFSSL_IPV6 */
+    fake_addr6.sin_family = WOLFSSL_IP6;
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd == -1)
+        return TEST_FAIL;
+    ret = wolfSSL_set_fd(ssl_c, sockfd);
+    if (ret != WOLFSSL_SUCCESS)
+        return TEST_FAIL;
+    /* can't return error here, as the peer is opaque for wolfssl library at
+     * this point */
+    ret = wolfSSL_dtls_set_peer(ssl_c, &fake_addr6, sizeof(fake_addr6));
+    if (ret != WOLFSSL_SUCCESS)
+        return TEST_FAIL;
+    ret = fcntl(sockfd, F_SETFL, O_NONBLOCK);
+    if (ret == -1)
+        return TEST_FAIL;
+    wolfSSL_dtls_set_using_nonblock(ssl_c, 1);
+    ret = wolfSSL_connect(ssl_c);
+    if (ret != WOLFSSL_FAILURE && ssl_c->error != SOCKET_ERROR_E)
+        return TEST_FAIL;
+
+    ret = wolfSSL_dtls_set_peer(ssl_s, &fake_addr6, sizeof(fake_addr6));
+    if (ret != WOLFSSL_SUCCESS)
+        return TEST_FAIL;
+    /* re-use the socket */
+    ret = wolfSSL_set_fd(ssl_c, sockfd);
+    if (ret != WOLFSSL_SUCCESS)
+        return TEST_FAIL;
+    wolfSSL_dtls_set_using_nonblock(ssl_s, 1);
+    ret = wolfSSL_accept(ssl_s);
+    if (ret != WOLFSSL_FAILURE && ssl_s->error != SOCKET_ERROR_E)
+        return TEST_FAIL;
+    close(sockfd);
+
+    wolfSSL_free(ssl_c);
+    wolfSSL_CTX_free(ctx_c);
+    wolfSSL_free(ssl_s);
+    wolfSSL_CTX_free(ctx_s);
+    return TEST_SUCCESS;
+}
+#else
+static int test_dtls_ipv6_check(void)
+{
+    return TEST_SKIPPED;
+}
+#endif
 /*----------------------------------------------------------------------------*
  | Main
  *----------------------------------------------------------------------------*/
@@ -66698,6 +67137,10 @@ TEST_CASE testCases[] = {
     TEST_DECL(test_extra_alerts_bad_psk),
     TEST_DECL(test_harden_no_secure_renegotiation),
     TEST_DECL(test_override_alt_cert_chain),
+    TEST_DECL(test_dtls13_bad_epoch_ch),
+    TEST_DECL(test_wolfSSL_dtls13_null_cipher),
+    TEST_DECL(test_dtls_msg_from_other_peer),
+    TEST_DECL(test_dtls_ipv6_check),
     /* If at some point a stub get implemented this test should fail indicating
      * a need to implement a new test case
      */

@@ -14356,12 +14356,9 @@ int wolfSSL_Cleanup(void)
 {
     int ret = WOLFSSL_SUCCESS; /* Only the first error will be returned */
     int release = 0;
-#if !defined(NO_SESSION_CACHE) && (defined(ENABLE_SESSION_CACHE_ROW_LOCK) || \
-                                   defined(SESSION_CACHE_DYNAMIC_MEM))
+#if !defined(NO_SESSION_CACHE)
     int i;
-    #ifdef SESSION_CACHE_DYNAMIC_MEM
     int j;
-    #endif
 #endif
 
     WOLFSSL_ENTER("wolfSSL_Cleanup");
@@ -14406,17 +14403,20 @@ int wolfSSL_Cleanup(void)
     }
     session_lock_valid = 0;
     #endif
-    #ifdef SESSION_CACHE_DYNAMIC_MEM
     for (i = 0; i < SESSION_ROWS; i++) {
         for (j = 0; j < SESSIONS_PER_ROW; j++) {
+    #ifdef SESSION_CACHE_DYNAMIC_MEM
             if (SessionCache[i].Sessions[j]) {
+                EvictSessionFromCache(SessionCache[i].Sessions[j]);
                 XFREE(SessionCache[i].Sessions[j], SessionCache[i].heap,
                       DYNAMIC_TYPE_SESSION);
                 SessionCache[i].Sessions[j] = NULL;
             }
+    #else
+            EvictSessionFromCache(&SessionCache[i].Sessions[j]);
+    #endif
         }
     }
-    #endif
     #ifndef NO_CLIENT_CACHE
     if ((clisession_mutex_valid == 1) &&
         (wc_FreeMutex(&clisession_mutex) != 0)) {
@@ -14501,7 +14501,9 @@ void SetupSession(WOLFSSL* ssl)
     }
 #endif
     session->timeout = ssl->timeout;
+#ifndef NO_ASN_TIME
     session->bornOn  = LowResTimer();
+#endif
 #if defined(SESSION_CERTS) || (defined(WOLFSSL_TLS13) && \
                                defined(HAVE_SESSION_TICKET))
     session->version = ssl->version;
@@ -21455,8 +21457,8 @@ static int wolfSSL_DupSessionEx(const WOLFSSL_SESSION* input,
              * the static buffer. */
             if (ticBuff != NULL) {
                 if (ticLenAlloc >= input->ticketLen) {
-                    output->ticket = output->staticTicket;
-                    output->ticketLenAlloc = 0;
+                    output->ticket = ticBuff;
+                    output->ticketLenAlloc = ticLenAlloc;
                 }
                 else {
                     WOLFSSL_MSG("ticket dynamic buffer too small but we are "
@@ -29976,27 +29978,6 @@ void* wolfSSL_GetHKDFExtractCtx(WOLFSSL* ssl)
         ssl->options.verifyDepth = (byte)depth;
     #endif
     }
-
-#endif /* OPENSSL_ALL || HAVE_LIGHTY || WOLFSSL_MYSQL_COMPATIBLE ||
-    HAVE_STUNNEL || WOLFSSL_NGINX || HAVE_POCO_LIB || WOLFSSL_HAPROXY */
-#if defined(OPENSSL_EXTRA) || defined(OPENSSL_EXTRA_X509_SMALL) || \
-    defined(HAVE_LIGHTY) || defined(WOLFSSL_MYSQL_COMPATIBLE) || \
-    defined(HAVE_STUNNEL) || defined(WOLFSSL_NGINX) || \
-    defined(HAVE_POCO_LIB) || defined(WOLFSSL_HAPROXY)
-    WOLFSSL_ASN1_OBJECT * wolfSSL_X509_NAME_ENTRY_get_object(WOLFSSL_X509_NAME_ENTRY *ne)
-    {
-#ifdef WOLFSSL_DEBUG_OPENSSL
-        WOLFSSL_ENTER("wolfSSL_X509_NAME_ENTRY_get_object");
-#endif
-        if (ne == NULL) {
-            return NULL;
-        }
-
-        ne->object = wolfSSL_OBJ_nid2obj_ex(ne->nid, ne->object);
-
-        return ne->object;
-    }
-
 
 #endif /* OPENSSL_ALL || HAVE_LIGHTY || WOLFSSL_MYSQL_COMPATIBLE ||
     HAVE_STUNNEL || WOLFSSL_NGINX || HAVE_POCO_LIB || WOLFSSL_HAPROXY */

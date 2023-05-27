@@ -2159,7 +2159,7 @@ int GetLength_ex(const byte* input, word32* inOutIdx, int* len, word32 maxIdx,
         /* Bottom 7 bits are the number of bytes to calculate length with.
          * Note: 0 indicates indefinite length encoding *not* 0 bytes of length.
          */
-        word32 bytes = b & 0x7F;
+        word32 bytes = (word32)b & 0x7FU;
         int minLen;
 
         /* Calculate minimum length to be encoded with bytes. */
@@ -2935,7 +2935,7 @@ static int SetASNIntMP(mp_int* n, int maxSz, byte* output)
     length = mp_unsigned_bin_size(n);
     if (maxSz >= 0 && (1 + length + (leadingBit ? 1 : 0)) > maxSz)
         return BUFFER_E;
-    idx = SetASNInt(length, leadingBit ? 0x80 : 0x00, output);
+    idx = SetASNInt(length, (byte)(leadingBit ? 0x80U : 0x00U), output);
     if (maxSz >= 0 && (idx + length) > maxSz)
         return BUFFER_E;
 
@@ -6146,6 +6146,7 @@ enum {
  * @param  [out]  hash     Hash algorithm to use on message.
  * @param  [out]  mgf      MGF algorithm to use with PSS padding.
  * @param  [out]  saltLen  Length of salt in PSS padding.
+ * @return  BAD_FUNC_ARG when the params is NULL.
  * @return  ASN_PARSE_E when the decoding fails.
  * @return  0 on success.
  */
@@ -6160,7 +6161,10 @@ static int DecodeRsaPssParams(const byte* params, word32 sz,
     byte tag;
     int length;
 
-    if (GetSequence_ex(params, &idx, &len, sz, 1) < 0) {
+    if (params == NULL) {
+        ret = BAD_FUNC_ARG;
+    }
+    if ((ret == 0) && (GetSequence_ex(params, &idx, &len, sz, 1) < 0)) {
         ret = ASN_PARSE_E;
     }
     if (ret == 0) {
@@ -6251,6 +6255,10 @@ static int DecodeRsaPssParams(const byte* params, word32 sz,
     DECL_ASNGETDATA(dataASN, rsaPssParamsASN_Length);
     int ret = 0;
     word16 sLen = 20;
+
+    if (params == NULL) {
+        ret = BAD_FUNC_ARG;
+    }
 
     CALLOC_ASNGETDATA(dataASN, rsaPssParamsASN_Length, ret, NULL);
     if (ret == 0) {
@@ -11451,6 +11459,7 @@ enum {
  * @param [in]      pubKey     Buffer holding encoded public key.
  * @param [in]      pubKeyLen  Length of encoded public key in bytes.
  * @return  0 on success.
+ * @return  BAD_FUNC_ARG when pubKey is NULL.
  * @return  ASN_PARSE_E when BER encoded data does not match ASN.1 items or
  *          is invalid.
  * @return  BUFFER_E when data in buffer is too small.
@@ -11469,6 +11478,10 @@ static int StoreEccKey(DecodedCert* cert, const byte* source, word32* srcIdx,
     byte* publicKey;
     byte  tag;
     int length;
+
+    if (pubKey == NULL) {
+        return BAD_FUNC_ARG;
+    }
 
     localIdx = *srcIdx;
     if (GetASNTag(source, &localIdx, &tag, maxIdx) < 0)
@@ -11526,6 +11539,11 @@ static int StoreEccKey(DecodedCert* cert, const byte* source, word32* srcIdx,
     int ret = 0;
     DECL_ASNGETDATA(dataASN, eccCertKeyASN_Length);
     byte* publicKey;
+
+    /* Validate parameters. */
+    if (pubKey == NULL) {
+        ret = BAD_FUNC_ARG;
+    }
 
     /* Clear dynamic data and check OID is a curve. */
     CALLOC_ASNGETDATA(dataASN, eccCertKeyASN_Length, ret, cert->heap);
@@ -11694,6 +11712,11 @@ static int GetCertKey(DecodedCert* cert, const byte* source, word32* inOutIdx,
 #endif
     int ret = 0;
     int length;
+
+    /* Validate paramaters. */
+    if (source == NULL) {
+        return ASN_PARSE_E;
+    }
 
 #ifndef WOLFSSL_ASN_TEMPLATE
     if (GetSequence(source, &srcIdx, &length, maxIdx) < 0)
@@ -14469,7 +14492,7 @@ word32 SetLength(word32 length, byte* output)
 
         if (output) {
             /* Encode count byte. */
-            output[i] = j | ASN_LONG_LENGTH;
+            output[i] = (byte)(j | ASN_LONG_LENGTH);
         }
         /* Skip over count byte. */
         i++;
@@ -14551,8 +14574,8 @@ word32 SetSet(word32 len, byte* output)
  */
 word32 SetImplicit(byte tag, byte number, word32 len, byte* output)
 {
-    tag = ((tag == ASN_SEQUENCE || tag == ASN_SET) ? ASN_CONSTRUCTED : 0)
-                    | ASN_CONTEXT_SPECIFIC | number;
+    tag = (byte)(((tag == ASN_SEQUENCE || tag == ASN_SET) ? ASN_CONSTRUCTED : 0)
+                 | ASN_CONTEXT_SPECIFIC | number);
     return SetHeader(tag, len, output);
 }
 
@@ -14567,8 +14590,8 @@ word32 SetImplicit(byte tag, byte number, word32 len, byte* output)
  */
 word32 SetExplicit(byte number, word32 len, byte* output)
 {
-    return SetHeader(ASN_CONTEXT_SPECIFIC | ASN_CONSTRUCTED | number, len,
-                     output);
+    return SetHeader((byte)(ASN_CONTEXT_SPECIFIC | ASN_CONSTRUCTED | number),
+                     len, output);
 }
 
 #if defined(OPENSSL_EXTRA)
@@ -14755,8 +14778,7 @@ word32 SetAlgoID(int algoOID, byte* output, int type, int curveSz)
 
     tagSz = (type == oidHashType ||
              (type == oidSigType && !IsSigAlgoECC((word32)algoOID)) ||
-             (type == oidKeyType && algoOID == RSAk)) ? 2 : 0;
-
+             (type == oidKeyType && algoOID == RSAk)) ? 2U : 0U;
     algoName = OidFromId((word32)algoOID, (word32)type, &algoSz);
     if (algoName == NULL) {
         WOLFSSL_MSG("Unknown Algorithm");
@@ -18635,7 +18657,7 @@ static int DecodeSubtree(const byte* input, word32 sz, Base_entry** head,
         }
 
         /* Get type, LSB 4-bits */
-        bType = (b & ASN_TYPE_MASK);
+        bType = (byte)(b & ASN_TYPE_MASK);
 
         if (bType == ASN_DNS_TYPE || bType == ASN_RFC822_TYPE ||
                                                         bType == ASN_DIR_TYPE) {
@@ -21989,7 +22011,7 @@ int ParseCertRelative(DecodedCert* cert, int type, int verify, void* cm)
 
                 if (decrementMaxPathLen && cert->ca->maxPathLen > 0) {
                     WOLFSSL_MSG("\tmaxPathLen status: reduce by 1");
-                    cert->maxPathLen = cert->ca->maxPathLen - 1;
+                    cert->maxPathLen = (byte)(cert->ca->maxPathLen - 1);
                     if (verify != NO_VERIFY && type != CA_TYPE &&
                                                     type != TRUSTED_PEER_TYPE) {
                         WOLFSSL_MSG("\tmaxPathLen status: OK");
@@ -22007,7 +22029,7 @@ int ParseCertRelative(DecodedCert* cert, int type, int verify, void* cm)
             } else if (cert->ca && cert->isCA) {
                 /* case where cert->pathLength extension is not set */
                 if (cert->ca->maxPathLen > 0) {
-                    cert->maxPathLen = cert->ca->maxPathLen - 1;
+                    cert->maxPathLen = (byte)(cert->ca->maxPathLen - 1);
                 } else {
                     cert->maxPathLen = 0;
                     if (verify != NO_VERIFY && type != CA_TYPE &&
@@ -31241,7 +31263,7 @@ int StoreECC_DSA_Sig_Bin(byte* out, word32* outLen, const byte* r, word32 rLen,
     idx = SetSequence(rLen+rAddLeadZero + sLen+sAddLeadZero + headerSz, out);
 
     /* store r */
-    ret = SetASNInt((int)rLen, rAddLeadZero ? 0x80 : 0x00, &out[idx]);
+    ret = SetASNInt((int)rLen, (byte)(rAddLeadZero ? 0x80U : 0x00U), &out[idx]);
     if (ret < 0)
         return ret;
     idx += (word32)ret;
@@ -31249,7 +31271,7 @@ int StoreECC_DSA_Sig_Bin(byte* out, word32* outLen, const byte* r, word32 rLen,
     idx += rLen;
 
     /* store s */
-    ret = SetASNInt((int)sLen, sAddLeadZero ? 0x80 : 0x00, &out[idx]);
+    ret = SetASNInt((int)sLen, (byte)(sAddLeadZero ? 0x80U : 0x00U), &out[idx]);
     if (ret < 0)
         return ret;
     idx += (word32)ret;
@@ -35262,6 +35284,7 @@ int InitOcspRequest(OcspRequest* req, DecodedCert* cert, byte useNonce,
                                                      DYNAMIC_TYPE_OCSP_REQUEST);
             if (req->url == NULL) {
                 XFREE(req->serial, req->heap, DYNAMIC_TYPE_OCSP);
+                req->serial = NULL;
                 return MEMORY_E;
             }
 
@@ -37229,8 +37252,11 @@ static void PrintObjectIdText(Asn1* asn1, Asn1PrintOptions* opts)
     int known = 1;
 
     /* Get the OID value for the OBJECT_ID. */
-    GetObjectId(asn1->data + asn1->offset, &i, &oid, oidIgnoreType,
-        asn1->item.len + 2);
+    if (GetObjectId(asn1->data + asn1->offset, &i, &oid, oidIgnoreType,
+            asn1->item.len + 2) == ASN_PARSE_E) {
+        known = 0;
+    }
+    else
 #if !defined(WOLFCRYPT_ONLY) && defined(OPENSSL_EXTRA)
     /* Lookup NID for OID value. */
     if ((nid = oid2nid(oid, oidIgnoreType)) != -1) {

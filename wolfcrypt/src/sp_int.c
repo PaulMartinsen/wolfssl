@@ -5473,76 +5473,63 @@ int sp_is_bit_set(const sp_int* a, unsigned int b)
  */
 int sp_count_bits(const sp_int* a)
 {
-    int n = 0;
+    int n = -1;
 
     /* Check parameter. */
-    if (a != NULL) {
+    if ((a != NULL) && (a->used > 0)) {
         /* Get index of last word. */
         n = (int)(a->used - 1);
         /* Don't count leading zeros. */
         while ((n >= 0) && (a->dp[n] == 0)) {
             n--;
         }
-        /* -1 indicates SP integer value was zero. */
-        if (n < 0) {
-            n = 0;
-        }
-        else {
-        #ifdef SP_ASM_HI_BIT_SET_IDX
+    }
+
+    /* -1 indicates SP integer value was zero. */
+    if (n < 0) {
+        n = 0;
+    }
+    else {
+        /* Get the most significant word. */
+        sp_int_digit d = a->dp[n];
+        /* Count of bits up to last word. */
+        n *= SP_WORD_SIZE;
+
+    #ifdef SP_ASM_HI_BIT_SET_IDX
+        {
             sp_int_digit hi;
-            sp_int_digit d;
-
-            /* Get the most significant word. */
-            d = a->dp[n];
-            /* Count of bits up to last word. */
-            n *= SP_WORD_SIZE;
-
             /* Get index of highest set bit. */
             SP_ASM_HI_BIT_SET_IDX(d, hi);
-
             /* Add bits up to and including index. */
             n += (int)hi + 1;
-        #elif defined(SP_ASM_LZCNT)
+        }
+    #elif defined(SP_ASM_LZCNT)
+        {
             sp_int_digit lz;
-            sp_int_digit d;
-
-            /* Get the most significant word. */
-            d = a->dp[n];
-            /* Count of bits up to last word. */
-            n *= SP_WORD_SIZE;
-
             /* Count number of leading zeros in highest non-zero digit. */
             SP_ASM_LZCNT(d, lz);
-
             /* Add non-leading zero bits count. */
             n += SP_WORD_SIZE - (int)lz;
-        #else
-            sp_int_digit d;
-
-            /* Get the most significant word. */
-            d = a->dp[n];
-            /* Count of bits up to last word. */
-            n *= SP_WORD_SIZE;
-
-            /* Check if top word has more than half the bits set. */
-            if (d > SP_HALF_MAX) {
-                /* Set count to a full last word. */
-                n += SP_WORD_SIZE;
-                /* Don't count leading zero bits. */
-                while ((d & ((sp_int_digit)1 << (SP_WORD_SIZE - 1))) == 0) {
-                    n--;
-                    d <<= 1;
-                }
-            }
-            else {
-                /* Add to count until highest set bit is shifted out. */
-                while (d != 0) {
-                    n++;
-                    d >>= 1;
-                }
-            }
-        #endif
         }
+    #else
+        /* Check if top word has more than half the bits set. */
+        if (d > SP_HALF_MAX) {
+            /* Set count to a full last word. */
+            n += SP_WORD_SIZE;
+            /* Don't count leading zero bits. */
+            while ((d & ((sp_int_digit)1 << (SP_WORD_SIZE - 1))) == 0) {
+                n--;
+                d <<= 1;
+            }
+        }
+        else {
+            /* Add to count until highest set bit is shifted out. */
+            while (d != 0) {
+                n++;
+                d >>= 1;
+            }
+        }
+    #endif
     }
 
     return n;
@@ -11696,7 +11683,7 @@ int sp_mul(const sp_int* a, const sp_int* b, sp_int* r)
  * @return  MP_OKAY on success.
  * @return  MP_MEM when dynamic memory allocation fails.
  */
-static int _sp_mulmod(const sp_int* a, const sp_int* b, const sp_int* m,
+static int _sp_mulmod_tmp(const sp_int* a, const sp_int* b, const sp_int* m,
     sp_int* r)
 {
     int err = MP_OKAY;
@@ -11718,6 +11705,39 @@ static int _sp_mulmod(const sp_int* a, const sp_int* b, const sp_int* m,
 
     /* Dispose of an allocated SP int. */
     FREE_SP_INT(t, NULL);
+
+    return err;
+}
+
+/* Multiply a by b mod m and store in r: r = (a * b) mod m
+ *
+ * @param  [in]   a  SP integer to multiply.
+ * @param  [in]   b  SP integer to multiply.
+ * @param  [in]   m  SP integer that is the modulus.
+ * @param  [out]  r  SP integer result.
+ *
+ * @return  MP_OKAY on success.
+ * @return  MP_MEM when dynamic memory allocation fails.
+ */
+static int _sp_mulmod(const sp_int* a, const sp_int* b, const sp_int* m,
+    sp_int* r)
+{
+    int err = MP_OKAY;
+
+    /* Use r as intermediate result if not same as pointer m which is needed
+     * after first intermediate result.
+     */
+    if (r != m) {
+        /* Multiply and reduce. */
+        err = sp_mul(a, b, r);
+        if (err == MP_OKAY) {
+            err = sp_mod(r, m, r);
+        }
+    }
+    else {
+        /* Do operation using temporary. */
+        _sp_mulmod_tmp(a, b, m, r);
+    }
 
     return err;
 }
@@ -11755,19 +11775,8 @@ int sp_mulmod(const sp_int* a, const sp_int* b, const sp_int* m, sp_int* r)
     }
 #endif
 
-    /* Use r as intermediate result if not same as pointer m which is needed
-     * after first intermediate result.
-     */
-    if ((err == MP_OKAY) && (r != m)) {
-        /* Multiply and reduce. */
-        err = sp_mul(a, b, r);
-        if (err == MP_OKAY) {
-            err = sp_mod(r, m, r);
-        }
-    }
-    else if (err == MP_OKAY) {
-        /* Do operation using temporary. */
-        _sp_mulmod(a, b, m, r);
+    if (err == MP_OKAY) {
+        err = _sp_mulmod(a, b, m, r);
     }
 
 #if 0
@@ -12445,6 +12454,10 @@ int sp_invmod_mont_ct(const sp_int* a, const sp_int* m, sp_int* r,
     else if (m->used * 2 >= SP_INT_DIGITS) {
         err = MP_VAL;
     }
+    /* check that r can hold the range of the modulus result */
+    else if (m->used > r->size) {
+        err = MP_VAL;
+    }
 
     /* 0 != n*m + 1 (+ve m), r*a mod 0 is always 0 (never 1) */
     if ((err == MP_OKAY) && (sp_iszero(a) || sp_iszero(m) ||
@@ -12562,7 +12575,7 @@ static int _sp_exptmod_ex(const sp_int* b, const sp_int* e, int bits,
                 /* 4.4  s = s | y */
                 s |= y;
                 /* 4.5. t[j] = t[j] * b */
-                err = sp_mulmod(t[j], b, m, t[j]);
+                err = _sp_mulmod(t[j], b, m, t[j]);
             }
 #else
             /* 4.1. t[s] = t[s] ^ 2 */
@@ -12576,7 +12589,7 @@ static int _sp_exptmod_ex(const sp_int* b, const sp_int* e, int bits,
 
             if (err == MP_OKAY) {
                 /* 4.2. y = e[i] */
-                int y = (e->dp[i >> SP_WORD_SHIFT] >> (i & SP_WORD_MASK)) & 1;
+                int y = (int)((e->dp[i >> SP_WORD_SHIFT] >> (i & SP_WORD_MASK)) & 1);
                 /* 4.3. j = y & s */
                 int j = y & s;
                 /* 4.4  s = s | y */
@@ -12585,7 +12598,7 @@ static int _sp_exptmod_ex(const sp_int* b, const sp_int* e, int bits,
                 _sp_copy((sp_int*)(((size_t)t[0] & sp_off_on_addr[j^1]) +
                                    ((size_t)t[1] & sp_off_on_addr[j  ])),
                          t[2]);
-                err = sp_mulmod(t[2], b, m, t[2]);
+                err = _sp_mulmod(t[2], b, m, t[2]);
                 _sp_copy(t[2],
                          (sp_int*)(((size_t)t[0] & sp_off_on_addr[j^1]) +
                                    ((size_t)t[1] & sp_off_on_addr[j  ])));
@@ -12682,7 +12695,11 @@ static int _sp_exptmod_mont_ex(const sp_int* b, const sp_int* e, int bits,
          */
         err = sp_mont_norm(t[1], m);
         if (err == MP_OKAY) {
-            err = sp_mulmod(t[0], t[1], m, t[0]);
+            err = sp_mul(t[0], t[1], t[0]);
+        }
+        if (err == MP_OKAY) {
+            /* t[0] = t[0] mod m, temporary size has to be bigger than t[0]. */
+            err = _sp_div(t[0], m, NULL, t[0], t[0]->used + 1);
         }
         if (err == MP_OKAY) {
             /* 4. t[1] = t[0]
@@ -12709,7 +12726,7 @@ static int _sp_exptmod_mont_ex(const sp_int* b, const sp_int* e, int bits,
 
             if (err == MP_OKAY) {
                 /* 6.2. y = e[i] */
-                int y = (e->dp[i >> SP_WORD_SHIFT] >> (i & SP_WORD_MASK)) & 1;
+                int y = (int)((e->dp[i >> SP_WORD_SHIFT] >> (i & SP_WORD_MASK)) & 1);
                 /* 6.3  j = y & s */
                 int j = y & s;
                 /* 6.4  s = s | y */
@@ -12860,7 +12877,11 @@ static int _sp_exptmod_mont_ex(const sp_int* b, const sp_int* e, int bits,
         err = sp_mont_norm(t[0], m);
         if (err == MP_OKAY) {
             /* 3. t[1] = ToMont(t[1]) */
-            err = sp_mulmod(t[1], t[0], m, t[1]);
+            err = sp_mul(t[1], t[0], t[1]);
+        }
+        if (err == MP_OKAY) {
+            /* t[1] = t[1] mod m, temporary size has to be bigger than t[1]. */
+            err = _sp_div(t[1], m, NULL, t[1], t[1]->used + 1);
         }
 
         /* 4. For i in 2..(2 ^ w) - 1 */
@@ -13465,8 +13486,6 @@ static int _sp_exptmod_nct(const sp_int* b, const sp_int* e, const sp_int* m,
     sp_int* r)
 {
     int i = 0;
-    int c = 0;
-    int y = 0;
     int bits;
     int winBits;
     int preCnt;
@@ -13474,7 +13493,6 @@ static int _sp_exptmod_nct(const sp_int* b, const sp_int* e, const sp_int* m,
     int done = 0;
     sp_int* tr = NULL;
     sp_int* bm = NULL;
-    sp_int_digit mask;
     /* Maximum winBits is 6 and preCnt is (1 << (winBits - 1)). */
 #ifndef WOLFSSL_SP_NO_MALLOC
     DECL_DYN_SP_INT_ARRAY(t, m->used * 2 + 1, (1 << 5) + 2);
@@ -13506,8 +13524,6 @@ static int _sp_exptmod_nct(const sp_int* b, const sp_int* e, const sp_int* m,
     }
     /* Top bit of exponent fixed as 1 for pre-calculated window. */
     preCnt = 1 << (winBits - 1);
-    /* Mask for calculating index into pre-computed table. */
-    mask = (sp_int_digit)preCnt - 1;
 
     /* Allocate sp_ints for:
      *  - pre-computation table
@@ -13547,8 +13563,9 @@ static int _sp_exptmod_nct(const sp_int* b, const sp_int* e, const sp_int* m,
     }
 
     if ((!done) && (err == MP_OKAY)) {
+        int y = 0;
+        int c = 0;
         sp_int_digit mp;
-        sp_int_digit n;
 
         /* Calculate Montgomery multiplier for reduction. */
         _sp_mont_setup(m, &mp);
@@ -13556,7 +13573,11 @@ static int _sp_exptmod_nct(const sp_int* b, const sp_int* e, const sp_int* m,
         err = sp_mont_norm(t[0], m);
         if (err == MP_OKAY) {
             /* 2. Convert base to Montgomery form. */
-            err = sp_mulmod(bm, t[0], m, bm);
+            err = sp_mul(bm, t[0], bm);
+        }
+        if (err == MP_OKAY) {
+            /* bm = bm mod m, temporary size has to be bigger than bm->used. */
+            err = _sp_div(bm, m, NULL, bm, bm->used + 1);
         }
         if (err == MP_OKAY) {
             /* Copy Montgomery form of base into first element of table. */
@@ -13582,6 +13603,10 @@ static int _sp_exptmod_nct(const sp_int* b, const sp_int* e, const sp_int* m,
          *    if less than windows bits in exponent, 1 in Montgomery form.
          */
         if (err == MP_OKAY) {
+            sp_int_digit n;
+            /* Mask for calculating index into pre-computed table. */
+            sp_int_digit mask = (sp_int_digit)preCnt - 1;
+
             /* Find the top bit. */
             i = (bits - 1) >> SP_WORD_SHIFT;
             n = e->dp[i--];
@@ -13807,7 +13832,11 @@ static int _sp_exptmod_nct(const sp_int* b, const sp_int* e, const sp_int* m,
         err = sp_mont_norm(t[1], m);
         if (err == MP_OKAY) {
             /* 1. Convert base to Montgomery form. */
-            err = sp_mulmod(t[0], t[1], m, t[0]);
+            err = sp_mul(t[0], t[1], t[0]);
+        }
+        if (err == MP_OKAY) {
+            /* t[0] = t[0] mod m, temporary size has to be bigger than t[0]. */
+            err = _sp_div(t[0], m, NULL, t[0], t[0]->used + 1);
         }
         if (err == MP_OKAY) {
             /* 2. Result starts as Montgomery form of base (assuming e > 0). */
@@ -18698,6 +18727,9 @@ int sp_prime_is_prime_ex(const sp_int* a, int trials, int* result, WC_RNG* rng)
 
 /* Calculates the Greatest Common Denominator (GCD) of a and b into r.
  *
+ * Find the largest number that divides both a and b without remainder.
+ * r <= a, r <= b, a % r == 0, b % r == 0
+ *
  * a and b are positive integers.
  *
  * Euclidian Algorithm:
@@ -18801,6 +18833,9 @@ static WC_INLINE int _sp_gcd(const sp_int* a, const sp_int* b, sp_int* r)
 
 /* Calculates the Greatest Common Denominator (GCD) of a and b into r.
  *
+ * Find the largest number that divides both a and b without remainder.
+ * r <= a, r <= b, a % r == 0, b % r == 0
+ *
  * a and b are positive integers.
  *
  * @param  [in]   a  SP integer of first operand.
@@ -18823,8 +18858,14 @@ int sp_gcd(const sp_int* a, const sp_int* b, sp_int* r)
     else if ((a->used >= SP_INT_DIGITS) || (b->used >= SP_INT_DIGITS)) {
         err = MP_VAL;
     }
+    /* Check that r is large enough to hold maximum sized result. */
+    else if (((a->used <= b->used) && (r->size < a->used)) ||
+             ((b->used < a->used) && (r->size < b->used))) {
+        err = MP_VAL;
+    }
 #ifdef WOLFSSL_SP_INT_NEGATIVE
-    else if ((a->sign == MP_NEG) || (b->sign >= MP_NEG)) {
+    /* Algorithm doesn't work with negative numbers. */
+    else if ((a->sign == MP_NEG) || (b->sign == MP_NEG)) {
         err = MP_VAL;
     }
 #endif
